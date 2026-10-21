@@ -302,7 +302,7 @@ uv run alfworld-download
 以下命令用于说明主要功能入口。多数脚本在源码中配置输入和输出路径，运行之前请核对本地文件、manifest 和模型设置，以免覆盖已有结果；部分步骤涉及大量 LLM API 调用。
 
 ```bash
-uv run python -m scripts.evaluate_baseline
+uv run python -m scripts.evaluation.evaluate_baseline
 uv run python -m scripts.analyze_failures
 uv run python -m scripts.verify_counterfactuals
 uv run python -m scripts.extract_ordinary_experiences
@@ -311,10 +311,10 @@ uv run python -m scripts.extract_experiences
 uv run python -m scripts.build_ordinary_experience_store
 uv run python -m scripts.build_unverified_experience_store
 uv run python -m scripts.build_experience_store
-uv run python -m scripts.compare_methods
-uv run python -m scripts.evaluate_reflexion
-uv run python -m scripts.evaluate_memory_scaling --split valid_seen --percentages 25 50 75
-uv run python -m scripts.evaluate_memory_scaling --split valid_unseen --percentages 25 50 75
+uv run python -m scripts.analysis.compare_methods
+uv run python -m scripts.evaluation.evaluate_reflexion
+uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_seen --percentages 25 50 75
+uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_unseen --percentages 25 50 75
 uv run python -m experiments.controlled_verification.run_potato
 ```
 

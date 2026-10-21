@@ -239,8 +239,8 @@ outputs/memory_qwen3.8-chat_valid_unseen_seed42_134/
 ### 10.3 统计脚本
 
 ```bash
-uv run python -m scripts.compare_methods
-uv run python -m scripts.analyze_task_types
+uv run python -m scripts.analysis.compare_methods
+uv run python -m scripts.analysis.analyze_task_types
 ```
 
 `compare_methods` 逐 episode 按顶层 `success` 统计配对转移；是否包含 Exact McNemar 取决于具体脚本版本，不应把外部计算的 p 值误说成该旧脚本已实现。
@@ -290,7 +290,7 @@ Seen 最优成功率 M50、Unseen 最优 M100。由于只有一次固定随机�
 - 默认 `outputs/` 受 `.gitignore` 忽略。报告中列出路径仅说明本地已产生过这些数据，不等于 GitHub 远程包含所有源 JSON。
 
 ```bash
-uv run python -m scripts.evaluate_baseline
+uv run python -m scripts.evaluation.evaluate_baseline
 uv run python -m scripts.analyze_failures
 uv run python -m scripts.verify_counterfactuals
 uv run python -m scripts.extract_ordinary_experiences
@@ -299,10 +299,10 @@ uv run python -m scripts.extract_experiences
 uv run python -m scripts.build_ordinary_experience_store
 uv run python -m scripts.build_unverified_experience_store
 uv run python -m scripts.build_experience_store
-uv run python -m scripts.compare_methods
+uv run python -m scripts.analysis.compare_methods
 uv run python -m scripts.build_memory_scaling_stores
-uv run python -m scripts.evaluate_memory_scaling --split valid_seen --percentages 25 50 75
-uv run python -m scripts.evaluate_memory_scaling --split valid_unseen --percentages 25 50 75
+uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_seen --percentages 25 50 75
+uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_unseen --percentages 25 50 75
 ```
 
 ## 14. State Tracking（Memory × State）消融，已完成

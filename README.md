@@ -1,238 +1,379 @@
 # Agent Self-Evolution
 
-**Training-Free LLM Agent Self-Evolution with Counterfactual Verification, State Tracking, and Evidence-Grounded Experience Memory**
+**Training-Free LLM Agent Self-Evolution via Counterfactual Verification, Experience Memory and State Tracking**
 
-本项目研究如何让大语言模型智能体（LLM Agent）在**不更新模型参数**的前提下，利用环境反馈积累可复用经验，并在后续任务中改进决策。以 **ALFWorld** 文本交互环境为实验平台，项目构建了从任务执行、失败分析、反事实验证、经验提炼与检索，到状态追踪、主张级证据审计和受控干预的完整研究流程。
+基于强化反馈的大语言模型智能体自进化系统。
 
-项目的核心问题不是简单地“让 Agent 记住经验”，而是进一步研究：**哪些经验真正有用？哪些经验有证据支持？环境中的成功续跑能否证明经验中的因果主张？如何降低错误经验和状态推断造成的负迁移？**
+本项目研究如何在**不更新大语言模型参数**的情况下，通过环境反馈、反事实验证和长期经验记忆，提高 LLM Agent 的任务成功率与决策效率。
 
-> **实验进度（2026-10-20）**：已完成 ReAct / Reflexion 对照、三种经验记忆方法、seen/unseen 评测、经验规模消融、Memory × State Tracking 的 2×2 消融、Claim-Level Evidence Matching 的 Dev10 对照，以及 episode_921 的 Potato 2×2 受控反事实实验。**Claim-Level 验证尚未形成经过下游 ALFWorld 评测的新经验库**，因此本 README 不宣称该部分已经提高任务成功率。
->
-> 完整实验记录、统计口径和复现说明见 [docs/experiment_results.md](docs/experiment_results.md)。
+项目以 **ALFWorld** 为实验环境，基于 ReAct Agent 实现任务执行、失败分析、关键决策定位、反事实验证、经验提炼、动态记忆更新和状态跟踪，并通过系统化的消融实验评估不同机制对 Agent 行为的影响。
 
-## 1. 研究目标
+核心研究内容包括：
 
-本项目围绕四个相互联系的研究问题展开：
+- **Counterfactual Experience Learning**：通过真实环境反事实验证，从失败轨迹中提炼可复用经验。
+- **State-Aware Execution**：显式跟踪任务要求的物体状态，减少状态遗漏和错误推断。
+- **Memory Evolution**：通过经验强化、合并、修订和删除，实现长期记忆的动态更新。
+- **Empirical Evaluation**：通过成功率、平均决策步数、负迁移和配对统计检验衡量实际效果。
 
-1. **经验学习（Experience Learning）**：从历史失败轨迹提炼的经验，能否改善 ReAct Agent 在新任务上的成功率与执行效率？
-2. **反事实验证（Counterfactual Verification）**：让 Agent 回到关键决策状态，替换动作并观察环境结果，是否能获得比纯语言反思更可靠的经验反馈？
-3. **状态感知决策（State-Aware Execution）**：显式跟踪物体的 `clean`、`cool`、`heat` 等状态，能否减少状态遗漏、错误推断与经验带来的负迁移？
-4. **证据驱动的经验可靠性（Evidence-Grounded Experience Validation）**：将自然语言经验拆为原子主张，追溯执行证据、识别混杂因素，并通过受控实验检验其因果有效性。
+## 1. 核心方法
 
-这里的 **Self-Evolution** 指 Agent 通过历史交互、外部经验记忆及可验证环境反馈改进后续行为，属于 **Training-Free / Non-Parametric Adaptation**；本项目并未使用 PPO、GRPO 等方法更新模型权重，也不将普通上下文反思表述为参数训练。
-
-## 2. 系统整体流程
+### 1.1 系统整体流程
 
 ```text
-                         ALFWorld Tasks
-                               │
-                               ▼
-                  ReAct Agent (qwen3.8-chat)
-                               │
-                      Environment Feedback
-                               │
-                         Episode Trajectory
-                               │
-                        Failed Episodes
-                               │
-                               ▼
-                     Failure Analyzer
-               (critical step / failure type /
-                  counterfactual candidates)
-                               │
-                               ▼
-                     Environment Replay
-                   + Counterfactual Rollout
-                   (actual ALFWorld won)
-                               │
-                 ┌─────────────┴──────────────┐
-                 ▼                            ▼
-       Experience Extraction          Evidence Investigation
-     Ordinary / Unverified /          Atomic Claim Extraction
-           CF-Verified                Evidence Packet Matching
-                 │                    Controlled Interventions
-                 ▼                            │
-           ExperienceStore               Claim Reliability
-         (lesson deduplication)       (Dev research and audit)
-                 │
-            BM25 Retrieval
-             (Top-K = 3)
-                 │
-                 ▼
-          Retrieved Lessons
-                 │
-                 ▼
-          ReAct / State-Aware Agent
-        (optional state tracking of
-           clean / cool / heat)
-                 │
-                 ▼
-             ALFWorld Evaluation
-       success / decision steps / regressions
+                    ALFWorld Task
+                          |
+                          v
+                     ReAct Agent
+                          |
+                          v
+                  Environment Feedback
+                          |
+                          v
+                   Episode Trajectory
+                          |
+                   Failed Episodes
+                          |
+                          v
+                    Failure Analyzer
+                 / Critical Step
+                /  Failure Type
+               /   Alternative Actions
+                          |
+                          v
+                  Counterfactual Replay
+                          |
+                          v
+                 Verified Rollout Results
+                          |
+                          v
+                  Experience Extraction
+                          |
+                          v
+                    Memory Evolution
+                 / Direct Update
+                /  Rule Strength Voting
+               /   Source-Aware Revision
+                          |
+                          v
+                    Experience Store
+                          |
+                          v
+                     BM25 Retrieval
+                       (Top-K=3)
+                          |
+                          v
+                ReAct + State Tracking
+                          |
+                          v
+                    ALFWorld Evaluation
+               Success / Steps / Regression
 ```
 
-**实施状态**：基于 Ordinary / Unverified / CF-Verified 的经验库检索和 State-Aware 执行已经完成下游评测；Claim-Level 证据审计与受控干预已完成开发阶段案例实验，尚未完成“基于 Claim 可靠性筛选记忆 → 下游任务评测”的最终闭环。上图表示项目的统一研究体系，不意味着所有研究模块均已在生产式 Agent 中联动。
+系统通过环境反馈积累经验，再将检索到的经验注入后续任务的 Agent Prompt，实现 **Training-Free / Non-Parametric Self-Evolution**。
 
-### 2.1 ReAct 与失败分析
+### 1.2 基于反事实验证的经验学习
 
-ReAct Agent 在 ALFWorld 中逐步选择合法动作，保存每步的 `observation`、`admissible_actions`、`thought`、`action`、`next_observation`、`done` 和 `won` 等信息。`FailureAnalyzer` 从失败轨迹中抽取：
+#### ReAct 任务执行
 
-- `critical_step`：可能影响结果的关键决策位置；
-- `failure_type` / `failure_reason`：失败类型与候选原因；
-- `counterfactual_actions`：拟在关键状态尝试的替代动作；
-- `expected_effect`：对候选动作的预期效果。
+Agent 根据当前任务、环境观察和可执行动作生成下一步决策，并与 ALFWorld 环境交互。
 
-失败原因与候选动作由 LLM 提议，不直接当作环境真值。
+系统记录完整执行轨迹，包括：
 
-### 2.2 反事实环境验证
+- `observation`：当前环境观察。
+- `admissible_actions`：环境允许的动作。
+- `thought`：模型的推理内容。
+- `action`：模型选择的动作。
+- `next_observation`：执行后的环境反馈。
+- `done` / `won`：任务终止与完成状态。
 
-验证器使用 `replay_to_step()` 恢复到关键动作**执行之前**的 ALFWorld 状态，执行候选替代动作，再让 Agent 在新状态下继续运行，记录真实的任务完成结果。候选成功是 `won=True`，而 `done=True` 仅代表 Episode 终止。
+#### 失败分析与关键决策定位
 
-这种机制可以回答“某个替代动作及其后续决策能否完成任务”，**但尚不能单独证明该动作是成功的唯一原因**，也不能直接保证提炼出的通用 Lesson 正确。因此项目同时研究严格控制变量的 Targeted Counterfactual Verification。
+`FailureAnalyzer` 对失败轨迹进行分析，识别失败类型、关键决策步骤和可能的替代动作。
 
-### 2.3 长期经验记忆
+反事实验证器通过环境重放恢复关键决策前的状态，执行替代动作，并让 Agent 从新状态继续运行。
 
-经验以 `failure_type`、`lesson`、`source_task` 为主要字段保存。`ExperienceStore` 对完全相同的 `lesson` 文本去重，并使用 **BM25 对 `source_task` 检索 Top-3**，将相关经验注入新任务的初始 ReAct Prompt。
+通过真实 ALFWorld 环境的 `won` 信号判断反事实续跑是否完成任务，而不是仅依赖 LLM 对策略有效性的判断。
 
-三种经验提炼方法使用同一检索协议，但提炼依据不同：
+#### 长期经验提炼与检索
 
-| 方法 | 提炼依据 | 环境验证 |
-|---|---|---|
-| **Ordinary Memory** | 完整失败轨迹的直接总结 | 否 |
-| **Unverified Memory** | 失败关键步骤与 LLM 建议的反事实动作 | 否 |
-| **CF-Verified Memory** | 失败分析、反事实环境执行结果和续跑轨迹 | 是 |
+实现三种经验提炼方式：
 
-### 2.4 状态追踪（State Tracking）
-
-`TaskStateTracker` 根据交互轨迹维护目标操作、物体实例、状态转换动作及确认结果，主要针对 `clean`、`cool`、`heat` 等任务要求。State-Aware Agent 可利用这些信息约束行动规划，例如：
-
-- 不因物体放在 Fridge 中就直接推断它已被冷却；
-- 将 `potato 2` 与 `potato 3` 的状态分别维护，避免实例混淆；
-- 不把移动、存储或观察动作直接等同于满足任务要求的状态转换；
-- 注意后续的加热、冷却等动作可能使先前状态判断失效。
-
-状态追踪来自可观测轨迹及规则解析，**不是对 ALFWorld 隐藏目标状态的直接读取**，也不能自动替代环境成功判据。
-
-### 2.5 主张级证据验证（Claim-Level Evidence Verification）
-
-自然语言 Lesson 往往包含多个断言：对象类型是否等价、某种动作顺序是否必要、某个策略是否总是有效。一次反事实续跑成功通常不足以同时验证这些断言。
-
-为此，项目在开发阶段实现并评估：
-
-1. **Atomic Claim Extraction**：将 Lesson 拆解成尽量独立且保留原逻辑强度的 Claims；
-2. **Evidence Packet Construction**：关联 Baseline、反事实候选、步骤反馈和证据 ID；
-3. **Evidence Matching**：判断证据支持、反驳或不足，并比较不同验证模型；
-4. **Targeted Controlled Replay**：当物体实例、动作和后续路径同时变化时，通过同状态重放及控制变量补充因果证据。
-
-后续方法将区分 **Case-Level Support、Causal Verification、Generalization Evidence**：当前任务中得到支持，不等于已在其他任务中证明普适有效。
-
-## 3. 实验设置
-
-| 设置 | 取值 |
+| 方法 | 核心机制 |
 |---|---|
-| 交互环境 | ALFWorld（TextWorld 文本任务） |
-| 执行模型 | `qwen3.8-chat` |
-| 固定随机种子 | `42` |
-| 训练任务 | 1000 |
-| `valid_seen` | 140 |
-| `valid_unseen` | 134 |
-| Agent 决策上限 | 50 |
-| 环境交互上限 | 50 |
-| 检索方法 | BM25(`source_task`) |
-| 检索经验数 | Top-K = 3 |
-| 经验去重 | 完全相同 `lesson` 字符串 |
-| 任务成功信号 | ALFWorld `won=True` |
+| Ordinary Memory | 直接从完整失败轨迹总结经验 |
+| Unverified Memory | 基于失败关键步骤及 LLM 提出的替代动作提炼经验 |
+| CF-Verified Memory | 结合反事实环境执行结果及续跑轨迹提炼经验 |
 
-任务 manifest 固定各个 split 的 Episode 集合，所有同协议对照在相同任务上进行比较。`valid_seen` / `valid_unseen` 的任务组成不同；由于研究中已多次使用这些数据分析错误和选择方法，**它们不能被视为完全未接触的最终测试集**。
+每条经验主要包含以下字段：
 
-## 4. 主要实验结果
+```json
+{
+  "failure_type": "missing_state_transition",
+  "lesson": "Ensure the required object state is confirmed before final placement.",
+  "source_task": "put a cool potato in microwave"
+}
+```
 
-### 4.1 训练数据与反事实采集
+`ExperienceStore` 使用 **BM25** 根据 `source_task` 检索相关经验，选择 Top-K Lesson 注入后续任务的 ReAct Prompt。
 
-在 Train 1000 个任务上，ReAct 成功 **867/1000（86.70%）**，失败 133 个，平均决策步数 **20.26**。失败分析产生 **371** 个反事实候选，其中 **197** 个在替换动作并续跑后成功（53.10%），91/133 个失败 Episode 至少存在一条成功续跑。
+经验存储和检索不需要修改底层 LLM 参数。
 
-三种经验库的去重后规模分别为：Ordinary **132**、Unverified **132**、CF-Verified **130** 条。训练阶段的反事实成功统计并非 371 个独立受控因果实验。
+### 1.3 状态跟踪（State Tracking）
 
-### 4.2 经验记忆与 Reflexion 对照
+针对 ALFWorld 中涉及物体状态转换的任务，实现 `TaskStateTracker`。
 
-| 方法 | Seen 成功率 | Seen 平均步数 | Unseen 成功率 | Unseen 平均步数 |
+主要关注三种状态：
+
+- `clean`：物体清洁状态。
+- `cool`：物体冷却状态。
+- `heat`：物体加热状态。
+
+核心功能包括：
+
+- 根据实际环境交互记录物体状态转换。
+- 区分不同物体实例，避免状态混淆。
+- 根据环境反馈确认状态，而非仅根据物体所在位置推断状态。
+- 处理后续操作可能导致的状态变化或失效。
+- 在 Agent 决策过程中提供状态提醒。
+
+例如，任务要求将冷却后的 Potato 放入 Microwave，Agent 需要确认目标 Potato 已完成冷却，不能仅因为物体位于 Fridge 中就推断冷却条件已经满足。
+
+State Tracking 可以独立启用，也可以与长期经验记忆组合使用。
+
+### 1.4 长期经验自进化（Memory Evolution）
+
+在原始经验提炼机制的基础上，进一步实现长期记忆的动态更新。
+
+系统根据历史失败轨迹与反事实续跑结果提炼候选 Lesson，并针对已有记忆执行更新操作。
+
+实现三种更新机制：
+
+| 方法 | 更新操作 | 核心思想 |
+|---|---|---|
+| Direct Update | ADD / KEEP / EDIT / REMOVE | 根据候选经验与已有经验的关系动态增删改 |
+| Rule Strength Voting | ADD / AGREE | 对已有规则进行匹配和强度强化 |
+| Source-Aware Revision | CREATE / CORROBORATE / REFINE | 积累来源信息，持续细化和修订经验内容 |
+
+三种方法使用相同的候选 Lesson，从空记忆库开始独立更新，以比较不同 Memory Update Policy 的下游任务效果。
+
+## 2. 实验设置
+
+| 配置 | 设置 |
+|---|---|
+| 交互环境 | ALFWorld / TextWorld |
+| LLM | `qwen3.8-chat` |
+| Train Episodes | 1,000 |
+| Valid Seen | 140 |
+| Valid Unseen | 134 |
+| Random Seed | 42 |
+| Max Steps | 50 |
+| Experience Retrieval | BM25 (`source_task`) |
+| Experience Top-K | 3 |
+| 参数更新 | 无（Training-Free） |
+
+使用固定任务 Manifest 保证各方法在相同任务集合上进行评估。
+
+主要评估指标包括：
+
+- **Success Rate**：任务完成率。
+- **Average Decision Steps**：平均决策步数。
+- **Improved / Regressed**：相较对照方法修复和退步的任务数。
+- **Exact McNemar Test**：基于任务级配对结果的统计检验。
+
+## 3. 原始经验学习与反事实验证实验
+
+### 3.1 Train 阶段
+
+在 1,000 个 Train 任务上，ReAct Agent 成功完成 867 个任务，失败 133 个。
+
+| 指标 | 结果 |
+|---|---:|
+| Train Success | 867/1000 |
+| Train Success Rate | 86.70% |
+| Average Decision Steps | 20.26 |
+| Failed Episodes | 133 |
+| Counterfactual Candidates | 371 |
+| Successful Counterfactual Rollouts | 197 |
+| Counterfactual Success Rate | 53.10% |
+| Episodes with Successful Counterfactual | 91/133 |
+
+反事实验证在 371 条候选分支中产生 197 条成功续跑，表明部分原始失败可以通过替代关键决策及后续行动得到修复。
+
+三种经验提炼方式生成的去重后 Memory 数量如下：
+
+| Memory | 数量 |
+|---|---:|
+| Ordinary Memory | 132 |
+| Unverified Memory | 132 |
+| CF-Verified Memory | 130 |
+
+### 3.2 ReAct / Reflexion / Experience Memory 对照
+
+| 方法 | Seen Success | Seen Avg Steps | Unseen Success | Unseen Avg Steps |
 |---|---:|---:|---:|---:|
-| ReAct | 120/140（85.71%） | 19.97 | 122/134（91.04%） | 18.24 |
-| Ordinary Memory | 122/140（87.14%） | 18.59 | 127/134（94.78%） | 15.32 |
-| Unverified Memory | 127/140（90.71%） | 17.01 | 129/134（96.27%） | 14.55 |
-| **CF-Verified Memory** | **128/140（91.43%）** | **15.54** | **131/134（97.76%）** | **13.22** |
-| Reflexion（最多 2 次尝试） | 133/140（95.00%） | 25.19 | 130/134（97.01%） | 21.78 |
+| ReAct | 120/140 (85.71%) | 19.97 | 122/134 (91.04%) | 18.24 |
+| Ordinary Memory | 122/140 (87.14%) | 18.59 | 127/134 (94.78%) | 15.32 |
+| Unverified Memory | 127/140 (90.71%) | 17.01 | 129/134 (96.27%) | 14.55 |
+| **CF-Verified Memory** | **128/140 (91.43%)** | **15.54** | **131/134 (97.76%)** | **13.22** |
+| Reflexion | 133/140 (95.00%) | 25.19 | 130/134 (97.01%) | 21.78 |
 
-CF-Verified Memory 相对 ReAct 在 Seen、Unseen 上分别提高 **5.72、6.72 个百分点**，平均决策步数分别下降约 **22.2%、27.5%**。但它相对 Unverified Memory 的净成功数仅增加 **1、2** 个，不能据此宣称额外收益具有统计显著性。Reflexion 允许最多两次尝试，不属于严格等预算比较。
+与 ReAct 相比，CF-Verified Memory：
 
-配对 Episode 分析也显示记忆可能产生负迁移：例如 ReAct → CF-Verified 在 Seen 修复 13 个 Episode，但使原本成功的 5 个回退；Unseen 修复 11 个、回退 2 个。
+- Seen 成功率提升 **5.72 个百分点**，平均决策步数降低约 **22.2%**。
+- Unseen 成功率提升 **6.72 个百分点**，平均决策步数降低约 **27.5%**。
 
-### 4.3 经验规模消融
+这说明外部经验记忆能够改善 ReAct Agent 的整体任务表现。
 
-| 经验规模 | 数量 | Seen 成功率 | Unseen 成功率 |
-|---|---:|---:|---:|
-| M0 | 0 | 85.71% | 91.04% |
-| M25 | 32 | 90.71% | 93.28% |
-| M50 | 65 | **94.29%** | 95.52% |
-| M75 | 98 | 92.86% | 94.78% |
-| M100 | 130 | 91.43% | **97.76%** |
+反事实验证经验在该实验中取得更好的成功率和决策效率，但相较 Unverified Memory 的额外收益较小。
 
-使用一次固定随机顺序的嵌套经验子集。Seen 在 M50 达到最高成功率，Unseen 在 M100 达到最高成功率；**经验数量增加并未表现出单调提升**。该实验不足以推出普遍的最优经验规模。
+Reflexion 最多允许两次任务尝试，因此与单次执行的 ReAct 和 Memory 方法并非严格等预算比较。
 
-### 4.4 Memory × State Tracking：2×2 消融
+## 4. Memory Scaling 消融实验
 
-在固定的执行模型、同一批任务和相同评测协议下，分别控制是否注入 Verified Memory、是否启用 State Tracking。
+基于原始 130 条 CF-Verified Memory，构建不同规模的经验子集，研究经验数量对 Agent 成功率和决策效率的影响。
 
-| 方法 | Memory | State | Seen 成功率 | Seen 平均步数 | Unseen 成功率 | Unseen 平均步数 |
+| Memory | 经验数量 | Seen Success | Seen Avg Steps | Unseen Success | Unseen Avg Steps |
+|---|---:|---:|---:|---:|---:|
+| M0 | 0 | 120/140 | 19.97 | 122/134 | 18.24 |
+| M25 | 32 | 127/140 | 16.15 | 125/134 | 15.80 |
+| M50 | 65 | **132/140** | **14.72** | 128/134 | 15.05 |
+| M75 | 98 | 130/140 | 16.00 | 127/134 | 13.87 |
+| M100 | 130 | 128/140 | 15.54 | **131/134** | **13.22** |
+
+**实验发现：**
+
+- Valid Seen 在 M50（65 条经验）时达到最高成功率 **94.29%**。
+- Valid Unseen 在 M100（130 条经验）时达到最高成功率 **97.76%**。
+- 经验数量增加并不一定带来更高成功率。
+- 经验内容、任务覆盖范围和检索结果共同影响 Agent 的实际表现。
+
+实验使用固定随机顺序构造的嵌套经验子集，因此结果反映该次记忆规模消融，不代表普遍最优的记忆数量。
+
+## 5. Memory × State Tracking 消融实验
+
+通过独立控制是否使用 CF-Verified Memory，以及是否启用 State Tracking，开展 2×2 消融实验。
+
+| 方法 | Memory | State | Seen Success | Seen Avg Steps | Unseen Success | Unseen Avg Steps |
 |---|:---:|:---:|---:|---:|---:|---:|
-| ReAct | — | — | 120/140（85.71%） | 19.97 | 122/134（91.04%） | 18.24 |
-| CF-Verified | ✓ | — | 128/140（91.43%） | 15.54 | 131/134（97.76%） | 13.22 |
-| ReAct + State | — | ✓ | 128/140（91.43%） | 17.43 | 126/134（94.03%） | 15.62 |
-| **CF-Verified + State** | ✓ | ✓ | **133/140（95.00%）** | **13.79** | **134/134（100.00%）** | **12.11** |
+| ReAct | — | — | 120/140 | 19.97 | 122/134 | 18.24 |
+| ReAct + State | — | ✓ | 128/140 | 17.43 | 126/134 | 15.62 |
+| CF-Verified Memory | ✓ | — | 128/140 | 15.54 | 131/134 | 13.22 |
+| **CF-Verified + State** | ✓ | ✓ | **133/140** | **13.79** | **134/134** | **12.11** |
 
-**CF-Verified + State** 相对 ReAct 增加 **13/140** 个 Seen 成功任务和 **12/134** 个 Unseen 成功任务。但状态追踪的额外贡献必须通过配对比较判断，不能只看最佳组合的绝对成功率。
+CF-Verified + State 在该实验中达到：
 
-| 配对比较 | Split | Fail→Success | Success→Fail | Exact McNemar 双侧 p |
+- **Valid Seen：133/140（95.00%）**
+- **Valid Unseen：134/134（100.00%）**
+
+### 配对统计检验
+
+| 对比 | Split | Improved | Regressed | Exact McNemar p |
 |---|---|---:|---:|---:|
-| CF-Verified → CF-Verified + State | Seen | 8 | 3 | 0.2265625 |
-| CF-Verified → CF-Verified + State | Unseen | 3 | 0 | 0.2500000 |
-| ReAct + State → CF-Verified + State | Seen | 7 | 2 | 0.1796875 |
-| ReAct + State → CF-Verified + State | Unseen | 8 | 0 | 0.0078125 |
+| Verified → Verified + State | Seen | 8 | 3 | 0.2266 |
+| Verified → Verified + State | Unseen | 3 | 0 | 0.2500 |
+| ReAct + State → Verified + State | Seen | 7 | 2 | 0.1797 |
+| ReAct + State → Verified + State | Unseen | 8 | 0 | 0.0078 |
 
-前两项状态追踪增益**没有达到 0.05 显著性阈值**。最后一项 p 值属于未经多重比较校正的探索性检验，且 Unseen 已出现明显天花板效应。状态追踪并非消除所有错误：搜索规划、对象类型选择和非状态任务仍可能回退。
+实验表明，经验记忆与状态跟踪具有一定互补作用，组合后取得了较高的任务成功率和较低的平均决策步数。
 
-开发阶段的状态审计中，Seen 的 Tracked/Untracked 为 **68/72**，Unseen 为 **75/59**。这些是状态追踪覆盖计数，**不是状态预测准确率**。
+同时，状态跟踪不能消除所有失败，目标物体选择、搜索规划和非状态类任务仍可能出现负迁移。
 
-### 4.5 Claim-Level Evidence Verification：Dev 实验
+上述显著性检验为探索性配对比较，未进行多重比较校正。
 
-在训练经验中构造 50 条经验的人工审计基准，当前使用 **Dev10** 调试方法，另 **Test40** 暂未用于 Prompt 调整。Dev10 的 Lesson-Level 标注为：**5 SUPPORTED、1 CONTRADICTED、4 INSUFFICIENT_EVIDENCE**。原子主张提取从 v1 的 27 条调整为 v2 的 **28 条 Claims**。
+## 6. Memory Evolution 全量实验
 
-对同一组 28 条 Claims 及其 Evidence Packets 进行对照：
+### 6.1 经验生成与动态更新
 
-| 证据匹配模型 | SUPPORTED | CONTRADICTED | INSUFFICIENT | 合计 |
-|---|---:|---:|---:|---:|
-| Qwen v1 | 10 | 1 | 17 | 28 |
-| Qwen v2 | 10 | 0 | 18 | 28 |
-| DeepSeek（相同 v2 Prompt 和证据输入） | 2 | 2 | 24 | 28 |
+使用 Train 阶段的 133 个失败 Episode 和 371 条反事实候选分支，执行完整的候选经验提炼与更新过程。
 
-Qwen v2 与 DeepSeek **18/28（64.3%）** 的 Claim 判断一致，另外 10 条出现分歧。**模型间一致率不是准确率**，也不能将 Lesson 的人工标签直接视为所有 Atomic Claims 的真值。对照揭示的主要风险包括：把局部结果泛化成全局规则、忽略对象实例混杂、将 `done=True` 当作成功，以及凭终局失败直接推断唯一原因。
+原始 Direct Update 的分支处理结果：
 
-#### 受控因果验证：episode_921（Potato 2×2）
+| 处理结果 | 数量 |
+|---|---:|
+| SKIPPED | 177 |
+| ABSTAIN | 21 |
+| KEEP | 151 |
+| PROVISIONAL | 22 |
+| **合计** | **371** |
 
-任务为 `put a cool potato in microwave.`。在 zero-based `critical_step=19` 恢复相同环境状态，针对 Potato 2 / 3 分别运行“不冷却”和“冷却”两个条件。
+其中 173 条候选 Lesson 进入统一的更新算法对照实验。
 
-| 物体实例 | 未冷却 | 冷却 | 配对一致性检查 |
-|---|---|---|---|
-| Potato 2 | 5 动作；目标未达成 | 6 动作；目标达成 | 均通过 |
-| Potato 3 | 5 动作；目标未达成 | 6 动作；目标达成 | 均通过 |
+三种方法使用相同候选池，生成三套独立的 Memory。
 
-四组全部完成；每对试验均通过**相同恢复状态、相同干预前状态、除冷却外动作序列一致**的检查。因而可支持一个**局部因果结论**：在当前任务状态及指定执行路径下，为同一 Potato 增加冷却动作，使目标由未达成变为达成。
+| 方法 | 更新操作统计 | 最终 Memory |
+|---|---|---:|
+| Direct Update | ADD 19、KEEP 151、EDIT 2、REMOVE 1 | **18** |
+| Rule Strength Voting | ADD 21、AGREE 152 | **21** |
+| Source-Aware Revision | CREATE 22、CORROBORATE 137、REFINE 14 | **22** |
 
-该结果**不能证明**所有 Cool 类任务均需相同动作，也不意味着已完成基于 Claim 验证的新记忆库评测。完整动作与反馈保存在本地：`outputs/analysis/controlled_verification/episode_921_potato_2x2_v1.json`。
+Direct Update 通过动态增删改得到 18 条经验；Rule Strength Voting 主要通过规则匹配和强度更新得到 21 条经验；Source-Aware Revision 通过来源补充及内容修订得到 22 条经验。
 
-## 5. 代码结构
+三组结果均来自完整候选池，而非小规模 Pilot。
 
-下面列出主要实现模块与运行入口，并非仓库的完整文件树；研究过程中部分新模块可能尚未与 GitHub 远程分支同步。
+### 6.2 Memory Evolution × State Tracking 完整效果验证
+
+对原始 CF-Verified Memory 和三套进化 Memory，在 Valid Seen / Valid Unseen 上分别启用与关闭 State Tracking，共完成 **16 组评估实验**。
+
+所有方法使用相同的任务 Manifest、执行模型、最大步数和经验检索数量。
+
+每个单元格表示：
+
+**成功任务数 / 总任务数（平均决策步数）**
+
+| Memory | Seen 无 State | Seen + State | Unseen 无 State | Unseen + State |
+|---|---|---|---|---|
+| Original CF-Verified (130) | 128/140 (15.14) | **133/140 (13.75)** | **130/134 (12.80)** | **134/134 (11.93)** |
+| Direct Update (18) | 126/140 (16.48) | 133/140 (14.35) | 130/134 (13.65) | 128/134 (13.92) |
+| Rule Strength Voting (21) | **129/140 (15.51)** | 133/140 (14.40) | 130/134 (13.84) | 130/134 (13.49) |
+| Source-Aware Revision (22) | 126/140 (16.36) | 133/140 (14.46) | 129/134 (14.46) | 133/134 (13.52) |
+
+本表来自最新统一评估批次。第 3、5 节保留历史实验批次结果；不同批次的部分成功数和平均步数存在差异，分别按各自原始记录报告。
+
+### 6.3 配对统计结果
+
+为分析经验更新带来的任务级变化，使用 Exact McNemar Test 比较相同任务上的成功与失败转换。
+
+| 对比 | 实验设置 | Improved | Regressed | p-value |
+|---|---|---:|---:|---:|
+| Original → Direct Update | Seen / 无 State | 7 | 9 | 0.8036 |
+| Original → Rule Strength Voting | Seen / 无 State | 7 | 6 | 1.0000 |
+| Original → Source-Aware Revision | Seen / 无 State | 5 | 7 | 0.7744 |
+| Original → Direct Update | Unseen / State | 0 | 6 | 0.0312 |
+| Original → Rule Strength Voting | Unseen / State | 0 | 4 | 0.1250 |
+| Original → Source-Aware Revision | Unseen / State | 0 | 1 | 1.0000 |
+| Direct Update → Source-Aware Revision | Unseen / State | 5 | 0 | 0.0625 |
+
+以上为双侧 Exact McNemar 检验结果，p 值未经多重比较校正。
+
+### 6.4 实验发现
+
+**1. 进化记忆显著压缩了经验库规模**
+
+从原始 130 条经验缩减为 18～22 条，但这种压缩没有稳定转化为任务性能提升。
+
+**2. 较强的 Agent 存在成功率天花板效应**
+
+原始 CF-Verified Memory 在 Unseen + State 上达到 134/134（100%），因此无法继续通过成功率体现额外收益。
+
+**3. 不同记忆更新机制存在任务级差异**
+
+在 Seen、无 State 条件下，Rule Strength Voting 达到 129/140，比原始经验多成功一个任务，但统计检验不显著。
+
+在 Unseen + State 上，Source-Aware Revision 达到 133/134，优于另外两种进化方法，但仍未超过原始 Memory。
+
+**4. 新记忆没有稳定改善决策效率**
+
+在四种评估条件下，三套进化 Memory 的平均决策步数均高于原始 130 条经验库。
+
+**5. 记忆进化可能产生负迁移**
+
+动态规则更新和经验压缩能够改变 Agent 行为，但可能减少任务覆盖能力，或使检索结果与实际任务需求不匹配。
+
+**总体结论：** 本次全量实验完成了三种 Memory Evolution 机制的构建与对照，但尚无证据证明它们能在下游 ALFWorld 任务上稳定优于原始 CF-Verified Memory。
+
+这一结果说明，长期记忆系统的实际效果不仅取决于更新策略，还与经验数量、任务覆盖、检索方式和 Agent 本身的能力有关。
+
+## 7. 项目结构
 
 ```text
 agent-self-evolution/
@@ -248,6 +389,9 @@ agent-self-evolution/
 │   ├── counterfactual/
 │   │   ├── replay.py
 │   │   └── verifier.py
+│   ├── data/
+│   │   ├── alfworld_data.py
+│   │   └── manifest.py
 │   ├── envs/
 │   │   └── environment.py
 │   ├── llm/
@@ -255,112 +399,130 @@ agent-self-evolution/
 │   └── memory/
 │       ├── experience.py
 │       ├── store.py
-│       ├── extractor.py
-│       ├── ordinary_extractor.py
-│       ├── unverified_extractor.py
 │       └── state_tracker.py
 ├── scripts/
-│   ├── analyze_failures.py
-│   ├── verify_counterfactuals.py
-│   ├── extract_experiences.py
-│   ├── extract_ordinary_experiences.py
-│   ├── extract_unverified_experiences.py
-│   ├── build_experience_store.py
-│   ├── compare_methods.py
-│   ├── evaluate_reflexion.py
-│   ├── evaluate_memory_scaling.py
-│   └── analysis/
-│       └── match_claim_evidence.py
+│   ├── analysis/
+│   ├── evaluation/
+│   │   ├── evaluate_state_tracking.py
+│   │   ├── evaluate_memory_scaling.py
+│   │   └── evaluate_memory_evolution.py
+│   └── memory/
+│       ├── run_evolution.py
+│       └── compare_updates.py
 ├── experiments/
-│   └── controlled_verification/
-│       └── run_potato.py
-├── tests/
-└── docs/
-    └── experiment_results.md
+├── docs/
+│   └── experiment_results.md
+├── pyproject.toml
+└── README.md
 ```
 
-## 6. 环境与复现
+主要代码模块：
 
-### 6.1 运行环境
+| 模块 | 功能 |
+|---|---|
+| `ReActAgent` | 执行 ALFWorld 任务并记录完整轨迹 |
+| `FailureAnalyzer` | 分析失败原因和关键决策 |
+| `Counterfactual Verifier` | 环境重放、替代动作执行和反事实续跑 |
+| `ExperienceStore` | 长期经验存储与 BM25 检索 |
+| `TaskStateTracker` | 维护物体状态转换与确认信息 |
+| `Memory Evolution` | 候选经验提炼及动态更新 |
+| `Evaluation Scripts` | 成功率、步数、消融和配对统计 |
 
-- Python **3.11**，使用 `uv` 管理依赖；
-- ALFWorld / TextWorld，以及对应的任务与 PDDL 资源；
-- 可用的 OpenAI-compatible LLM API 配置，执行模型为 `qwen3.8-chat`；
-- 固定任务 manifest，执行前核对随机种子、路径和参数。
+## 8. 环境与运行
 
-首次安装依赖及准备 ALFWorld 资源可使用：
+### 8.1 环境配置
+
+项目使用 Python 3.11，采用 `uv` 管理依赖。
+
+安装项目依赖：
 
 ```bash
 uv sync
+```
+
+下载 ALFWorld 环境数据：
+
+```bash
 uv run alfworld-download
 ```
 
-本项目通过环境变量 `OPENAI_API_KEY`、`OPENAI_BASE_URL`、`OPENAI_MODEL` 为 LLM 客户端提供连接配置。不同阶段运行 Qwen 或 DeepSeek 时，应明确记录实际模型名称，且**不要提交 `.env` 或 API Key**。
-
-### 6.2 复现入口
-
-以下命令用于说明主要功能入口。多数脚本在源码中配置输入和输出路径，运行之前请核对本地文件、manifest 和模型设置，以免覆盖已有结果；部分步骤涉及大量 LLM API 调用。
-
-```bash
-uv run python -m scripts.evaluation.evaluate_baseline
-uv run python -m scripts.analyze_failures
-uv run python -m scripts.verify_counterfactuals
-uv run python -m scripts.extract_ordinary_experiences
-uv run python -m scripts.extract_unverified_experiences
-uv run python -m scripts.extract_experiences
-uv run python -m scripts.build_ordinary_experience_store
-uv run python -m scripts.build_unverified_experience_store
-uv run python -m scripts.build_experience_store
-uv run python -m scripts.analysis.compare_methods
-uv run python -m scripts.evaluation.evaluate_reflexion
-uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_seen --percentages 25 50 75
-uv run python -m scripts.evaluation.evaluate_memory_scaling --split valid_unseen --percentages 25 50 75
-uv run python -m experiments.controlled_verification.run_potato
-```
-
-完整的 Claim Extraction、Evidence Packet 和 State-Aware 批量评测命令依赖本地脚本版本及配置，请按实际源码执行；本 README 不将尚未核实的命令伪装为已经确认可复现的入口。
-
-### 6.3 数据与输出
-
-主要实验数据写入 `outputs/`，例如：
+使用 OpenAI-compatible API 调用 LLM，需配置以下环境变量：
 
 ```text
-outputs/manifests/
-outputs/baseline_qwen3.8-chat_train_seed42_1000/
-outputs/failure_analysis_qwen3.8-chat_train_seed42_1000/
-outputs/counterfactual_qwen3.8-chat_train_seed42_1000/
-outputs/memory/
-outputs/memory_scaling/
-outputs/analysis/claims_dev_v2.jsonl
-outputs/analysis/evidence_packets_dev_v1.jsonl
-outputs/analysis/evidence_matches_dev_v2.jsonl
-outputs/analysis/evidence_matches_deepseek_dev_v2.jsonl
-outputs/analysis/controlled_verification/episode_921_potato_2x2_v1.json
+OPENAI_API_KEY
+OPENAI_BASE_URL
+OPENAI_MODEL
 ```
 
-`outputs/` 被 `.gitignore` 忽略。README 中记录实验路径和结果**不表示相应完整原始 JSON 均已上传 GitHub**。可溯源复现需要保留任务 manifest、模型配置、原始轨迹、证据 ID 和文件哈希。
+实验执行模型为 `qwen3.8-chat`。
 
-## 7. 研究发现与局限
+### 8.2 Memory Evolution
 
-**当前可由实测结果支持的结论：**
+基于 Train 数据生成完整候选经验并执行 Direct Update：
 
-- 从失败轨迹提炼并检索长期经验，在两组现有评估任务上均可改善 ReAct 的整体表现；
-- 环境反事实验证有额外正向观察，但相比 Unverified 的净增益较小，且存在负迁移；
-- State-Aware 执行与经验记忆结合，在当前评测中表现最好，但状态模块的独立增益仍存在统计不确定性；
-- 成功的反事实续跑**不能自动证明**对应 Lesson 中所有主张真实、必要或可泛化；
-- Potato 2×2 受控实验说明通过固定物体实例与环境状态，可以为单个 Claim 获得比自由续跑更强的**局部因果证据**。
+```bash
+uv run python -m scripts.memory.run_evolution \
+  --run-name train_full_v1 \
+  --top-k 8
+```
 
-**当前限制：**
+基于相同候选 Lesson，生成另外两套进化 Memory：
 
-- 单一执行模型、固定随机种子，且 seen/unseen 数据已经参与反复分析，仍需独立任务与跨模型验证；
-- 多个配对比较未经多重检验校正；Unseen 任务成功率接近或达到上限，存在天花板效应；
-- 当前 BM25 检索和经验提炼 Prompt 存在影响性能的其他因素，尚不能把整体收益完全归因于某个单独模块；
-- Claim-Level 证据匹配仍在 Dev 阶段，尚无“Claim 过滤后的新经验库”的下游 Agent 成功率结论；
-- 历史实验未完整保存 Token Usage 与实际账单，决策步数不是总训练/验证成本。
+```bash
+uv run python -m scripts.memory.compare_updates \
+  --source-run train_full_v1 \
+  --output-run train_full_comparison \
+  --limit 371 \
+  --top-k 8
+```
 
-下一步将完善 Claim 的**案例支持、因果验证和跨任务泛化**三层判据，对 Knife/Butterknife 等具有混杂因素的案例执行受控干预，并在新的经验库构建后评估是否减少回退、提升可靠性。
+### 8.3 完整效果评估
 
----
+Valid Seen：
 
-**实验详情、任务类型分解、配对比较、统计限制与完整数据口径：**[docs/experiment_results.md](docs/experiment_results.md)。
+```bash
+uv run python -m scripts.evaluation.evaluate_memory_evolution \
+  --split valid_seen \
+  --state both
+```
+
+Valid Unseen：
+
+```bash
+uv run python -m scripts.evaluation.evaluate_memory_evolution \
+  --split valid_unseen \
+  --state both
+```
+
+`--state both` 会分别运行启用和关闭 State Tracking 的四套 Memory 对照实验。
+
+评估程序支持逐 Episode 保存轨迹及断点恢复，记录：
+
+- `summary.json`：成功率、平均步数和逐任务结果。
+- `comparison.json`：相同 State 设置下不同 Memory 的配对比较。
+- `state_comparison.json`：相同 Memory 在不同 State 设置下的配对比较。
+- `episode_XXX.json`：完整执行轨迹。
+
+实验结果保存至：
+
+```text
+outputs/memory_evolution/evaluations/
+```
+
+`outputs/` 默认通过 `.gitignore` 排除，不提交完整实验轨迹和中间数据至 GitHub。
+
+## 9. 项目总结
+
+本项目实现了一套 **Training-Free LLM Agent Self-Evolution** 研究系统，在不更新底层语言模型参数的条件下，通过环境反馈、反事实验证、长期经验记忆和状态跟踪改善 Agent 的任务执行行为。
+
+已完成的主要工作与结果：
+
+1. **反事实经验学习**：针对 1,000 个 Train Episode 中的 133 个失败任务，完成 371 条反事实候选验证，并构建 130 条 CF-Verified Memory。
+2. **经验学习效果验证**：CF-Verified Memory 在原始实验中相较 ReAct 提升 Seen / Unseen 成功率，并降低平均决策步数。
+3. **记忆规模消融**：完成 M0、M25、M50、M75、M100 五组对照，发现记忆数量与性能并非单调关系。
+4. **状态跟踪机制**：实现 `TaskStateTracker`，与 CF-Verified Memory 结合后，在 Seen 上达到 133/140，在 Unseen 上达到 134/134。
+5. **长期记忆进化**：实现 Direct Update、Rule Strength Voting、Source-Aware Revision 三种更新算法，将统一候选池构建为 18、21、22 条经验。
+6. **完整下游评估**：完成 16 组 Memory Evolution × State Tracking 实验及配对统计分析，发现动态更新和经验压缩未必能够稳定改善任务成功率与执行效率。
+
+研究表明，**LLM Agent 的经验自进化不仅取决于是否能够产生和更新经验，还取决于经验的可靠性、任务覆盖能力、检索机制及其与 Agent 决策能力的适配关系。**
 

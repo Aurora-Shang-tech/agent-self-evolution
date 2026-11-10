@@ -1,6 +1,6 @@
 # Agent Self-Evolution — Experiment Results
 
-> 更新截至 **2026-10-20**。本文件为**完整实验报告（可直接覆盖 `docs/experiment_results.md`）**：保留历史 ALFWorld 实验，并整合 State Tracking 与 Claim-Level Evidence Verification 的已运行结果。用户本地已有实验程序与原始输出，此次仅更新文档，不新建或修改任何实验代码和数据文件。未记录的 Token Usage、实际费用与独立最终测试集表现不作推测。
+> 更新截至 **2026-11-10**。本报告保留原始 ALFWorld、State Tracking 和 Claim-Level Evidence Verification 的历史结果，并增加 Memory Evolution、Hybrid BM25、Utility Learning 与统一 Memory Pipeline 的最新实验。不同批次、任务集合和状态跟踪设置不可混作严格等预算的同一次评估。
 
 ## 1. 实验目标
 
@@ -10,7 +10,10 @@
 2. **Unverified Memory**：加入失败关键步骤分析及未验证的反事实候选。
 3. **CF-Verified Memory**：在真实 ALFWorld 中执行反事实候选、记录续跑结果，再提炼经验。
 4. **State Tracking / State-Aware Agent**：显式维护任务所需 clean/cool/heat 状态，提高状态相关决策的一致性。
-5. **Claim-Level Evidence Verification（研究中）**：拆分 Lesson 主张、匹配环境证据，并通过定向受控干预解决因果混杂。
+5. **Claim-Level Evidence Verification（历史研究分支）**：拆分 Lesson 主张、匹配环境证据，并通过定向受控干预分析因果混杂。
+6. **Memory Evolution**：基于反事实经验执行 Direct Update、Rule Strength Voting 和 Source-Aware Revision。
+7. **Hybrid / Utility Retrieval**：融合 Source Task 与 Lesson 相关性，以反馈学习的 Q 值重排候选。
+8. **Integrated Memory Pipeline**：稳定 Memory ID、同步经验快照、保存反馈与运行配对评估。
 
 前 3 种经验方法在同一执行模型、同一任务 manifest 上评估。后两项为后续研究扩展，不能将其结果混同为此前 Verified Memory 的原有评测结果。
 
@@ -406,3 +409,125 @@ outputs/analysis/controlled_verification/episode_921_potato_2x2_v1.json
 
 本次完成了：Dev10 Lesson 级标注、28 Atomic Claims、证据包与双模型匹配、10 条模型分歧审计，以及一次成功的 Potato 2×2 受控验证。证据审计表明“反事实续跑成功”不足以证明原 Lesson 的所有断言；更强的验证机制应分离 **Case-Level Support / Causal Verification / Generalization Evidence**。截至本报告更新，**尚未**在新 Claim-Level 经验库上重新运行 Valid Seen/Unseen 的下游成功率评测，因此不报告此方法的性能收益。
 
+
+## 16. 记忆检索与效用学习（2026-11-10 新增）
+
+> **本节数据范围**：后续效用实验以 Train 留出任务为主，和第 2～14 节 Valid Seen/Unseen 历史实验不同。所有下述成功率均限于各自任务集合；小样本差异仅是探索性结果。指标来自已保存的用户本地执行日志，完整 `outputs/` 原始轨迹没有包含在 Git 仓库中。
+
+### 16.1 全量 Memory Evolution（补充）
+
+使用 Train 1,000 个任务对应的 133 个失败 Episode 和 371 条反事实候选分支，构建候选经验并比较三种更新方式。Direct Update 的分支结果为：SKIPPED 177、ABSTAIN 21、KEEP 151、PROVISIONAL 22。173 条候选进入更新算法对照。
+
+| 更新策略 | 操作统计 | 最终记忆条数 |
+|---|---|---:|
+| Direct Update | ADD 19 / KEEP 151 / EDIT 2 / REMOVE 1 | 18 |
+| Rule Strength Voting | ADD 21 / AGREE 152 | 21 |
+| Source-Aware Revision | CREATE 22 / CORROBORATE 137 / REFINE 14 | 22 |
+
+对应 **16 组 Memory Evolution × State Tracking** 全量评估（括号内为平均决策步数）：
+
+| 经验库 | Seen 无 State | Seen + State | Unseen 无 State | Unseen + State |
+|---|---|---|---|---|
+| Original CF-Verified (130) | 128/140 (15.14) | **133/140 (13.75)** | **130/134 (12.80)** | **134/134 (11.93)** |
+| Direct Update (18) | 126/140 (16.48) | 133/140 (14.35) | 130/134 (13.65) | 128/134 (13.92) |
+| Rule Strength Voting (21) | **129/140 (15.51)** | 133/140 (14.40) | 130/134 (13.84) | 130/134 (13.49) |
+| Source-Aware Revision (22) | 126/140 (16.36) | 133/140 (14.46) | 129/134 (14.46) | 133/134 (13.52) |
+
+这一批次与第 14 节的历史 State 消融并非相同的评估批次，故不合并两者的平均步数。记忆进化成功将规模从 130 压缩至 18～22，但**尚未稳定提高全量任务成功率或效率**；原始 130 + State 仍是重要强基线。
+
+### 16.2 Hybrid BM25 与 Task-Aware 探索
+
+Hybrid BM25 对当前任务分别计算 Source Task 和 Lesson 文本的 BM25 相关性，融合后召回候选经验。Task-Aware 为已有过滤策略研究，暂不作为统一 Pipeline 默认方法。
+
+已有 Valid Seen 探索结果：Direct Update 18 的 Hybrid 为 **131/140、平均 14.91 步**；Task-Aware v2 为 **131/140、平均 15.44 步**，配对有 3 个改善、3 个退步。说明任务感知过滤尚未带来明确的成功率净收益。
+
+### 16.3 Lesson 08 独立注入：仅做小样本探查
+
+在 6 个未用于原始经验构建的 Clean 类 Train 游戏中，无经验 Control 成功 5/6；注入单独 Lesson 08 后成功 6/6。Improved / Regressed 为 **+1 / -0**，平均步数差 **-6.17**。其中 Cloth 任务从 50 步失败转为 17 步成功；平均步数收益主要受该案例影响。
+
+此实验并不等价于 Lesson 08 在完整 Top-3 检索环境中的边际贡献。
+
+### 16.4 Utility-Aware Retrieval v1（无 State）
+
+流程：12 个 Train 留出游戏用于反馈学习，另一组 12 个不同游戏用于冻结 Q 后的 Hybrid / Utility 配对评估。
+
+- 算法：Hybrid BM25 Top-8 候选召回，使用 `Q <- (1-alpha) Q + alpha*r` 更新弱效用统计（`alpha=0.3`，`r=+1/-1`），以 `weight=0.35` 进行重排序，最终选 Top-3。
+- 学习阶段：12 个 Episode 中成功 11 个。
+- 评估阶段：两组排序在 **12/12** 任务上不同。
+
+| 指标 | Hybrid | Utility v1 |
+|---|---:|---:|
+| 成功数 | 10/12 | **11/12** |
+| 成功率 | 83.33% | **91.67%** |
+| 平均决策步数 | 18.83 | **17.25** |
+
+Improved / Regressed 为 **+1 / -0**，平均步数变化 **-1.58**，双侧 Exact McNemar **p=1.0**。观察到初步正向结果，但样本量和配对差异都太小，不能宣称稳定优势。一次任务成功会为当次 Top-3 经验共享正奖励，因此 Q 是历史使用反馈而非经验的独立因果效用。
+
+### 16.5 Contextual Utility v2（离线原型）
+
+复用 v1 的 12 对结果，对双方检索集合中增删的 Lesson 记录按任务类型划分的弱信用，未因本步骤额外执行 LLM。
+
+只有 **2/12** 对出现非零弱信用：`look_at_obj_in_light` 的 Lesson 03 为 **+0.303**，Lesson 10 为 **-0.303**。在另一组 12 个 Train 游戏的检查中，Contextual 版 Top-3 与 Hybrid **0/12** 发生变化，所以按既定协议跳过了新 LLM 评估。
+
+**不能把 0/12 检索变化解释为 0/12 成功率或算法被证明无效**。目前该原型的信用信号稀疏，保留实现，不作为默认检索器。
+
+### 16.6 统一 Memory Pipeline + State Tracking
+
+已通过 `src/memory/pipeline.py`、`scripts/memory/manage_pipeline.py` 集成：Direct Update 18 条、稳定 Memory ID、Hybrid + Utility、ReAct、可选 State Tracking，以及反馈保存。
+
+- 旧 v1 `frozen_utility.json` Q 值按稳定 ID 迁移，18 条经验对齐。
+- ADD 新建 Q 记录；EDIT 由于内容变化重置 Q；REMOVE 归档并移出活跃库；KEEP 保留统计。
+- 一次 Train 的端到端执行成功，Agent **9 步完成任务**，反馈日志返回 `Feedback applied: True`；该任务不再作为独立评估使用。
+- 新配对评估使用剩余 11 个 Train 游戏，冻结 Q 与经验快照，两组均开启 State Tracking，区别仅为 Utility 重排。
+
+| 指标 | Hybrid + State | Utility + State |
+|---|---:|---:|
+| 成功数 | **11/11** | **11/11** |
+| 成功率 | 100% | 100% |
+| 检索 Top-3 顺序改变 | — | **11/11** |
+| Improved / Regressed | — | **0 / 0** |
+| 相对平均步数变化 | — | **+2.73** |
+| 相对总步数变化 | — | **+30** |
+| 双侧 Exact McNemar p | — | **1.0** |
+
+由于 Hybrid 已达到 11/11，存在成功率天花板效应。**此批任务上，Utility 只改变了经验检索排序，没有增加成功任务，平均步数反而增加**。不能把工程闭环跑通等同于效用学习实现了稳定性能提升。
+
+### 16.7 代码与本地结果路径
+
+| 组件 | 主要代码 |
+|---|---|
+| Direct Update / Memory Evolution | `scripts/memory/run_evolution.py`、`src/memory/updater.py` |
+| Hybrid + Utility | `src/memory/utility_store.py`、`src/memory/utility.py` |
+| Contextual Utility 原型 | `src/memory/contextual_store.py`、`src/memory/contextual_utility.py` |
+| 稳定 ID + 集成 | `src/memory/pipeline.py`、`scripts/memory/manage_pipeline.py` |
+| Utility v1 评估 | `scripts/evaluation/evaluate_utility_memory.py` |
+| Contextual v2 评估 | `scripts/evaluation/evaluate_contextual_utility.py` |
+| 统一 Pipeline 对照 | `scripts/evaluation/evaluate_pipeline_pair.py` |
+
+本地结果（由 `.gitignore` 排除）：
+
+```text
+outputs/memory_evolution/train_full_v1/working_memory.json
+outputs/memory_utility/feedback_v1/qwen3.8-chat/seed_20261110/
+outputs/memory_utility/contextual_v2/qwen3.8-chat/seed_20261112/
+outputs/memory_pipeline/state.json
+outputs/memory_pipeline/paired_state_v1/qwen3.8-chat/v2_seed_20261112/
+```
+
+可离线查看最新统计，不重跑 LLM：
+
+```bash
+uv run python -m scripts.evaluation.evaluate_utility_memory --stage report
+uv run python -m scripts.evaluation.evaluate_contextual_utility --stage report
+uv run python -m scripts.evaluation.evaluate_pipeline_pair --stage report
+```
+
+## 17. 当前阶段结论与后续优先级
+
+1. **保留最强对照**：原始 CF-Verified 130 + State 在历史完整 Seen/Unseen 数据上的强表现依然是重要参考；不能因已集成新功能就忽略它。
+2. **记忆更新保留**：Direct Update、Rule Strength Voting、Source-Aware Revision 都已实现，但压缩经验并未稳定提高完整任务表现。
+3. **检索主线保留**：Hybrid BM25 是当前统一 Pipeline 的核心检索基线，Utility v1 可选启用；Contextual v2 与 Task-Aware 保留原型和消融记录。
+4. **评价以下游为准**：Lesson 无需绝对正确，核心指标始终是成功率、平均决策步数和负迁移数量。
+5. **不夸大当前结论**：Utility v1 小样本正向、集成 + State 小样本效率退步，说明不同配置的收益可能不同。下阶段应优先复用已有代码与数据，避免对同一组任务反复调参并称其为独立验证。
+
+**项目状态：Memory Evolution、Hybrid Retrieval、Utility Learning 与 State Tracking 已形成完整工程闭环；性能优势仍须依据具体任务集和对照设置判断。**

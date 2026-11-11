@@ -1,28 +1,29 @@
-"""ALFWorld反事实验证"""
+
+"""Counterfactual ALFWorld verification with original memory/state context."""
 
 from dataclasses import dataclass
 
-from src.core.protocol import environment_feedback, trajectory_prefix_messages
-from src.core.trajectory import Trajectory
+from src.core.protocol import (
+    environment_feedback,
+    trajectory_prefix_messages,
+)
+from src.core.trajectory import Trajectory, TrajectoryStep
 from src.counterfactual.replay import replay_to_step
+from src.memory.state_tracker import TaskStateTracker
 
 
 @dataclass(frozen=True)
 class CounterfactualResult:
-    """一次完整反事实验证的结果"""
-
     critical_step: int
     original_action: str
     counterfactual_action: str
-
     success: bool
     continuation_steps: int
     trajectory: Trajectory | None = None
 
+
 @dataclass(frozen=True)
 class CounterfactualBatchResult:
-    """多个反事实候选的验证结果"""
-
     critical_step: int
     original_action: str
     results: tuple[CounterfactualResult, ...]
@@ -36,18 +37,13 @@ def verify_counterfactual(
     *,
     max_steps: int = 50,
 ) -> CounterfactualResult:
-    """替换关键动作，并让Agent从反事实状态继续运行"""
-
-    # 1. 检查critical_step
-    if critical_step < 0 or critical_step >= len(trajectory.steps):
+    if not 0 <= critical_step < len(trajectory.steps):
         raise IndexError(
             f"critical_step out of range: {critical_step}"
         )
 
-    # 2. 原轨迹中的关键步骤
     original_step = trajectory.steps[critical_step]
 
-    # 3. Replay到关键动作执行之前
     env, replayed = replay_to_step(
         trajectory=trajectory,
         step_index=critical_step,
@@ -55,102 +51,138 @@ def verify_counterfactual(
     )
 
     try:
-        # 4. 检查反事实动作是否合法
         if counterfactual_action not in replayed.admissible_actions:
             raise ValueError(
                 "Counterfactual action is not admissible: "
                 f"{counterfactual_action}"
             )
 
-        # 5. 恢复关键动作之前的完整ReAct历史
-        messages = trajectory_prefix_messages(
-            trajectory=trajectory,
-            step_index=critical_step,
-        )
+        prefix_length = 2 + 2 * critical_step
 
-        # 6. 用反事实动作替换原来的关键动作
-        messages.append(
-            {
-                "role": "assistant",
-                "content": (
-                    "Thought: Try an alternative action from the critical state.\n"
-                    f"Action: {counterfactual_action}"
-                ),
-            }
-        )
+        if trajectory.messages:
+            if len(trajectory.messages) < prefix_length:
+                raise RuntimeError(
+                    "Stored LLM context is incomplete"
+                )
 
-        # 7. 在真实恢复后的环境中执行反事实动作
-        counterfactual_step = env.step(counterfactual_action)
+            messages = [
+                dict(row)
+                for row in trajectory.messages[:prefix_length]
+            ]
 
-        # 反事实动作本身已经直接完成任务
-        if counterfactual_step.won:
-            return CounterfactualResult(
-                critical_step=critical_step,
-                original_action=original_step.action,
-                counterfactual_action=counterfactual_action,
-                success=True,
-                continuation_steps=0,
+        elif (
+            getattr(agent, "use_state_tracking", False)
+            or getattr(agent, "experience_store", None) is not None
+        ):
+            raise RuntimeError(
+                "Cannot restore memory/state context "
+                "from legacy trajectory"
             )
 
-        # 反事实动作导致episode结束，但任务失败
-        if counterfactual_step.done:
-            return CounterfactualResult(
-                critical_step=critical_step,
-                original_action=original_step.action,
-                counterfactual_action=counterfactual_action,
-                success=False,
-                continuation_steps=0,
+        else:
+            messages = trajectory_prefix_messages(
+                trajectory,
+                critical_step,
             )
 
-        # 8. 把反事实动作产生的真实环境反馈加入历史
+        tracker = None
+
+        if agent.use_state_tracking:
+            tracker = TaskStateTracker(trajectory.task)
+
+            for step in trajectory.steps[:critical_step]:
+                tracker.observe(step)
+
+        messages.append({
+            "role": "assistant",
+            "content": (
+                "Thought: Try an alternative action "
+                "from the critical state.\n"
+                f"Action: {counterfactual_action}"
+            ),
+        })
+
+        cf = env.step(counterfactual_action)
+
+        if cf.won or cf.done:
+            return CounterfactualResult(
+                critical_step,
+                original_step.action,
+                counterfactual_action,
+                bool(cf.won),
+                0,
+                None,
+            )
+
+        if tracker is not None:
+            tracker.observe(
+                TrajectoryStep(
+                    observation=replayed.observation,
+                    admissible_actions=list(
+                        replayed.admissible_actions
+                    ),
+                    thought=(
+                        "Try an alternative action "
+                        "from the critical state."
+                    ),
+                    action=counterfactual_action,
+                    valid_format=True,
+                    admissible=cf.admissible,
+                    next_observation=cf.observation,
+                    score=cf.score,
+                    done=cf.done,
+                    won=cf.won,
+                )
+            )
+
         feedback = environment_feedback(
             step=critical_step + 1,
-            observation=counterfactual_step.observation,
-            admissible_actions=counterfactual_step.admissible_actions,
+            observation=cf.observation,
+            admissible_actions=cf.admissible_actions,
             valid_format=True,
-            admissible=counterfactual_step.admissible,
-            done=counterfactual_step.done,
-            won=counterfactual_step.won,
+            admissible=cf.admissible,
+            done=cf.done,
+            won=cf.won,
         )
 
-        messages.append(
-            {
-                "role": "user",
-                "content": feedback,
-            }
-        )
+        feedback += agent._state_reminder(tracker)
 
-        # 9. 保持与baseline相同的总decision budget
+        messages.append({
+            "role": "user",
+            "content": feedback,
+        })
+
         remaining_steps = max_steps - (critical_step + 1)
 
         if remaining_steps <= 0:
             return CounterfactualResult(
-                critical_step=critical_step,
-                original_action=original_step.action,
-                counterfactual_action=counterfactual_action,
-                success=False,
-                continuation_steps=0,
+                critical_step,
+                original_step.action,
+                counterfactual_action,
+                False,
+                0,
+                None,
             )
 
-        # 10. 从反事实状态继续让ReAct Agent自主运行
         continuation = agent.continue_from(
             env,
             task=trajectory.task,
             gamefile=trajectory.gamefile,
-            observation=counterfactual_step.observation,
-            admissible_actions=counterfactual_step.admissible_actions,
+            observation=cf.observation,
+            admissible_actions=cf.admissible_actions,
             messages=messages,
             max_decisions=remaining_steps,
+            tracker=tracker,
+            step_offset=critical_step + 1,
         )
 
-        # 11. 返回完整反事实验证结果
         return CounterfactualResult(
-            critical_step=critical_step,
-            original_action=original_step.action,
-            counterfactual_action=counterfactual_action,
-            success=continuation.success,
-            continuation_steps=len(continuation),
-            trajectory=continuation,
+            critical_step,
+            original_step.action,
+            counterfactual_action,
+            continuation.success,
+            len(continuation),
+            continuation,
         )
 
     finally:
@@ -165,27 +197,25 @@ def verify_counterfactual_candidates(
     *,
     max_steps: int = 50,
 ) -> CounterfactualBatchResult:
-    """逐个验证多个反事实候选动作"""
+    if not 0 <= critical_step < len(trajectory.steps):
+        raise IndexError(
+            f"Invalid critical_step: {critical_step}"
+        )
 
-    if critical_step < 0 or critical_step >= len(trajectory.steps):
-        raise IndexError(f"critical_step out of range: {critical_step}")
-
-    original_step = trajectory.steps[critical_step]
-
-    results = []
-
-    for action in counterfactual_actions:
-        result = verify_counterfactual(
-            trajectory=trajectory,
-            critical_step=critical_step,
-            counterfactual_action=action,
-            agent=agent,
+    results = tuple(
+        verify_counterfactual(
+            trajectory,
+            critical_step,
+            action,
+            agent,
             max_steps=max_steps,
         )
-        results.append(result)
+        for action in counterfactual_actions
+    )
 
     return CounterfactualBatchResult(
-        critical_step=critical_step,
-        original_action=original_step.action,
-        results=tuple(results),
+        critical_step,
+        trajectory.steps[critical_step].action,
+        results,
     )
+

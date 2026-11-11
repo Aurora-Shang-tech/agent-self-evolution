@@ -9,7 +9,7 @@
 
 > **项目定位**：以端到端 Success Rate、Average Decision Steps、Improved / Regressed 为最终优化指标。Lesson 是帮助决策的经验，而不是需要逐条证明绝对正确的规则。所有方法的增益均以实际环境评估为准。
 >
-> **当前状态（2026-11-10）**：Counterfactual Verification、Memory Evolution、Hybrid BM25、Utility-Aware Retrieval、Contextual Utility 原型、稳定 Memory ID、Memory Pipeline 和 State Tracking 均已实现或完成本地实验。最新集成实验 Hybrid + State 与 Utility + State 均为 11/11，Utility 平均多用 2.73 步；不应将工程集成成功解读为稳定的性能提升。
+> **历史阶段（2026-11-10）**：Counterfactual Verification、Memory Evolution、Hybrid BM25、Utility-Aware Retrieval、Contextual Utility 原型、稳定 Memory ID、Memory Pipeline 和 State Tracking 均已实现或完成本地实验。最新集成实验 Hybrid + State 与 Utility + State 均为 11/11，Utility 平均多用 2.73 步；不应将工程集成成功解读为稳定的性能提升。
 
 ## 目录
 
@@ -23,6 +23,7 @@
 - [8. 统一 Memory Pipeline](#8-统一-memory-pipeline)
 - [9. 快速开始与复现命令](#9-快速开始与复现命令)
 - [10. 项目结构与研究结论](#10-项目结构与研究结论)
+- [11. 连续自进化闭环](#11-连续自进化闭环2026-11-11)
 
 ## 1. 研究目标与系统架构
 
@@ -776,3 +777,71 @@ agent-self-evolution/
 
 **研究方向：Training-Free LLM Agent Self-Evolution / Memory Evolution / Hybrid Retrieval / Utility-Aware Feedback / State-Aware Execution。**
 
+
+## 11. 连续自进化闭环（2026-11-11）
+
+### 11.1 系统实现
+
+新增批次式 `EvolutionController`，将以下模块连接为统一流程：
+
+ReAct 执行 → 失败分析 → 反事实验证 → Lesson 提取 →
+ADD/EDIT/REMOVE/KEEP → 候选记忆版本 → 配对验证 → 版本选择。
+
+主要新增与修改：
+
+- `src/evolution/controller.py`：连续调度、候选版本、验证门控和断点恢复。
+- `src/evolution/version_store.py`：正式版本加载、历史版本读取与完整性校验。
+- `scripts/run_continual_evolution.py`：统一命令行入口。
+- `src/core/trajectory.py`：保存完整 LLM 对话上下文。
+- `src/agents/react_agent.py`：支持恢复上下文和 State Tracking 后续跑。
+- `src/counterfactual/verifier.py`：在原始 Memory + State 上下文中进行反事实验证。
+
+不更新底座模型参数。本实验固定使用 Original CF-Verified
+130、Source-task BM25 Top-3、State Tracking 和最大 50 决策步。
+
+### 11.2 连续三轮实验
+
+采用固定 Train 任务划分：72 个学习任务、12 个版本验证任务、
+30 个最终留出任务。三轮各使用 24 个不同学习任务。
+
+| 指标 | Round 1 | Round 2 | Round 3 |
+|---|---:|---:|---:|
+| 成功任务 | 24/24 | 23/24 | 23/24 |
+| 平均决策步数 | 12.54 | 15.04 | 14.96 |
+| 反事实分支 | 0 | 2 | 2 |
+| 成功反事实 | 0 | 2 | 0 |
+| 记忆处理 | 无失败 | KEEP | NO_CHANGE |
+| 正式版本 | v000 | v000 | v000 |
+
+**总体结果：70/72 成功（97.22%），平均 14.18 决策步。**
+
+三轮自动执行、失败处理和无更新时的版本保持已验证。
+第二轮产生两条成功反事实分支，但 Updater 决定 KEEP；
+第三轮没有成功反事实分支。
+
+因此尚未产生新的正式记忆版本，候选版本配对验证与自动晋升
+尚未在真实候选变更下得到验证，也不能声称动态进化已优于固定记忆。
+
+### 11.3 使用方式
+
+查看已完成实验：
+
+```bash
+uv run python -m scripts.run_continual_evolution \
+  --stage status --run-name dynamic_v1 --mode dynamic
+```
+
+加载当前正式记忆：
+
+```python
+from src.evolution.version_store import load_active_memory
+
+store, info = load_active_memory(
+    "outputs/continual_v1/runs/dynamic_v1"
+)
+```
+
+本次实验结果保存在
+`outputs/continual_v1/runs/dynamic_v1/run_summary.json`。
+
+`outputs/` 默认不提交 GitHub，最终留出任务尚未用于本次评估。

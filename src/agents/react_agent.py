@@ -1,16 +1,20 @@
-"""基于ReAct的ALFWorld Agent"""
 
-from src.core.protocol import environment_feedback, initial_messages, parse_assistant
+"""ReAct Agent for ALFWorld with replayable execution context."""
+
+from src.core.protocol import (
+    environment_feedback,
+    initial_messages,
+    parse_assistant,
+)
 from src.core.trajectory import Trajectory, TrajectoryStep
 from src.envs.environment import ALFWorldEnvironment
 from src.memory.state_tracker import TaskStateTracker
 
-class ReActAgent:
-    """使用LLM在ALFWorld中执行任务"""
 
+class ReActAgent:
     def __init__(
-        self, 
-        llm, 
+        self,
+        llm,
         max_steps: int = 50,
         experience_store=None,
         experience_top_k: int = 3,
@@ -23,30 +27,29 @@ class ReActAgent:
         self.use_state_tracking = use_state_tracking
 
     def run(self, env: ALFWorldEnvironment) -> Trajectory:
-        """在一个ALFWorld game中运行完整episode"""
-
         state = env.reset()
         trajectory = Trajectory(
             task=state.task,
-            gamefile=state.gamefile
+            gamefile=state.gamefile,
         )
 
         experiences = []
 
         if self.experience_store is not None:
-            retrieved = self.experience_store.retrieve(
-                task=state.task,
-                top_k=self.experience_top_k,
-            )
-
             experiences = [
-                experience.lesson
-                for experience in retrieved
+                item.lesson
+                for item in self.experience_store.retrieve(
+                    task=state.task,
+                    top_k=self.experience_top_k,
+                )
             ]
-        
-        tracker = (TaskStateTracker(state.task) if self.use_state_tracking else None)
 
-        # messages同时承担完整交互历史
+        tracker = (
+            TaskStateTracker(state.task)
+            if self.use_state_tracking
+            else None
+        )
+
         messages = initial_messages(
             task=state.task,
             observation=state.observation,
@@ -60,7 +63,7 @@ class ReActAgent:
             messages[-1]["content"] += reminder
 
         return self._run_loop(
-            env=env,
+            env,
             trajectory=trajectory,
             messages=messages,
             observation=state.observation,
@@ -68,7 +71,6 @@ class ReActAgent:
             max_decisions=self.max_steps,
             tracker=tracker,
         )
-
 
     def continue_from(
         self,
@@ -80,8 +82,14 @@ class ReActAgent:
         admissible_actions: tuple[str, ...],
         messages: list[dict],
         max_decisions: int,
+        tracker: TaskStateTracker | None = None,
+        step_offset: int = 0,
     ) -> Trajectory:
-        """从已经恢复好的环境状态继续运行Agent"""
+        if self.use_state_tracking and tracker is None:
+            raise ValueError(
+                "State-aware continuation requires "
+                "restored TaskStateTracker"
+            )
 
         trajectory = Trajectory(
             task=task,
@@ -89,12 +97,14 @@ class ReActAgent:
         )
 
         return self._run_loop(
-            env=env,
+            env,
             trajectory=trajectory,
-            messages=list(messages),
+            messages=[dict(message) for message in messages],
             observation=observation,
             admissible_actions=admissible_actions,
             max_decisions=max_decisions,
+            tracker=tracker,
+            step_offset=step_offset,
         )
 
     def _run_loop(
@@ -107,21 +117,20 @@ class ReActAgent:
         admissible_actions: tuple[str, ...],
         max_decisions: int,
         tracker: TaskStateTracker | None = None,
+        step_offset: int = 0,
     ) -> Trajectory:
-        """执行ReAct决策循环"""
-
-        for step_index in range(max_decisions):
+        for local_step in range(max_decisions):
             response = self.llm.chat(messages)
             parsed = parse_assistant(response)
 
-            # 把模型原始回答加入历史
             messages.append({
                 "role": "assistant",
                 "content": response,
             })
 
+            absolute_step = step_offset + local_step + 1
+
             if not parsed.valid_format:
-                # 格式错误没有真正执行环境动作任记录为一次Agent决策
                 trajectory.add_step(
                     TrajectoryStep(
                         observation=observation,
@@ -136,8 +145,9 @@ class ReActAgent:
                         won=False,
                     )
                 )
+
                 feedback = environment_feedback(
-                    step = step_index + 1,
+                    step=absolute_step,
                     observation=observation,
                     admissible_actions=admissible_actions,
                     valid_format=False,
@@ -145,24 +155,22 @@ class ReActAgent:
                     done=False,
                     won=False,
                 )
+
                 messages.append({
                     "role": "user",
                     "content": feedback,
                 })
-
                 continue
 
             assert parsed.action is not None
 
-            action = parsed.action
-
-            env_step = env.step(action)
+            env_step = env.step(parsed.action)
 
             step = TrajectoryStep(
                 observation=observation,
                 admissible_actions=list(admissible_actions),
                 thought=parsed.reasoning,
-                action=action,
+                action=parsed.action,
                 valid_format=True,
                 admissible=env_step.admissible,
                 next_observation=env_step.observation,
@@ -187,7 +195,7 @@ class ReActAgent:
             admissible_actions = env_step.admissible_actions
 
             feedback = environment_feedback(
-                step=step_index + 1,
+                step=absolute_step,
                 observation=observation,
                 admissible_actions=admissible_actions,
                 valid_format=True,
@@ -195,18 +203,28 @@ class ReActAgent:
                 done=env_step.done,
                 won=env_step.won,
             )
+
             feedback += self._state_reminder(tracker)
+
             messages.append({
                 "role": "user",
                 "content": feedback,
             })
+
         else:
             trajectory.truncated = True
+
+        trajectory.messages = [
+            dict(message)
+            for message in messages
+        ]
 
         return trajectory
 
     @staticmethod
-    def _state_reminder(tracker: TaskStateTracker | None) -> str:
+    def _state_reminder(
+        tracker: TaskStateTracker | None,
+    ) -> str:
         if tracker is None or tracker.operation is None:
             return ""
 
@@ -236,3 +254,4 @@ class ReActAgent:
             "A later heating or cooling action can invalidate "
             "an earlier temperature state."
         )
+

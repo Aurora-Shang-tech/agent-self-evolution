@@ -94,7 +94,8 @@ def load_memory_version(
                 failure_type="memory_evolution",
                 lesson=lesson,
                 source_task=source_task,
-            )
+            ),
+            is_new=memory_id.startswith("evo_"),
         )
 
     actual_hash = hashlib.sha256(
@@ -137,8 +138,95 @@ def read_round_history(
     if type(completed) is not int or completed < 0:
         raise ValueError("Invalid completed round count")
 
+    events = state.get("rollback_events", [])
+
+    if not isinstance(events, list):
+        raise ValueError("Invalid rollback event history")
+
+    last_round = -1
+
+    for event in events:
+        if (
+            not isinstance(event, dict)
+            or set(event) != {"after_round", "from", "to"}
+        ):
+            raise ValueError("Invalid rollback event")
+
+        after = event["after_round"]
+
+        if (
+            type(after) is not int
+            or after < last_round
+            or after < 0
+            or after > completed
+        ):
+            raise ValueError("Invalid rollback event order")
+
+        for field in ("from", "to"):
+            value = event[field]
+
+            if (
+                not isinstance(value, str)
+                or not value.startswith("v")
+                or len(value) < 4
+                or not value[1:].isascii()
+                or not value[1:].isdigit()
+            ):
+                raise ValueError("Invalid rollback version")
+
+        last_round = after
+
+    index = 0
+
+    def consume_rollbacks(after_round, current):
+        nonlocal index
+
+        applied = []
+
+        while (
+            index < len(events)
+            and events[index]["after_round"] == after_round
+        ):
+            event = events[index]
+
+            if event["from"] != current:
+                raise ValueError(
+                    "Rollback source does not match active history"
+                )
+
+            ancestor = current
+            visited = set()
+
+            while ancestor != event["to"]:
+                if ancestor in visited:
+                    raise ValueError("Version ancestry cycle")
+
+                visited.add(ancestor)
+
+                snapshot = read_json(
+                    root / "versions" / f"{ancestor}.json"
+                )
+
+                if snapshot.get("version") != ancestor:
+                    raise ValueError("Invalid version ancestry")
+
+                ancestor = snapshot.get("parent")
+
+                if ancestor is None:
+                    raise ValueError(
+                        "Rollback target is not an ancestor"
+                    )
+
+            current = event["to"]
+            applied.append(dict(event))
+            index += 1
+
+        return current, applied
+
     history = []
-    previous = "v000"
+    previous, initial_rollbacks = consume_rollbacks(
+        0, "v000"
+    )
 
     for round_id in range(1, completed + 1):
         path = (
@@ -161,6 +249,10 @@ def read_round_history(
         after = record["active_after"]
         result = record["result"]
 
+        next_active, rollbacks = consume_rollbacks(
+            round_id, after
+        )
+
         history.append({
             "round": round_id,
             "parent": previous,
@@ -169,9 +261,17 @@ def read_round_history(
             "accepted": bool(result.get("accept", False)),
             "reason": result["reason"],
             "learning_failures": record["learning_failures"],
+            "rollbacks_after": rollbacks,
         })
 
-        previous = after
+        previous = next_active
+
+    if index != len(events):
+        raise ValueError("Unprocessed rollback events")
+
+    if previous != state.get("active_version"):
+        raise ValueError(
+            "Active version does not match recorded history"
+        )
 
     return history
-

@@ -115,7 +115,8 @@ def experience_store(
                 "memory_evolution",
                 item.lesson,
                 item.source_task,
-            )
+            ),
+            is_new=item.id.startswith("evo_"),
         )
 
     return store
@@ -251,7 +252,7 @@ class EvolutionController:
         )
 
         if (
-            self.protocol["retrieval"] != "source_task_bm25"
+            self.protocol["retrieval"] != "source_task_bm25_type_priority"
             or not self.protocol["state_tracking"]
         ):
             raise ValueError(
@@ -727,13 +728,19 @@ class EvolutionController:
                 )
 
             else:
-                candidate = ComparativeExtractor(
-                    self.llm
-                ).extract(
-                    trace,
-                    verification,
-                    candidate_index=successful[0],
-                )
+                extractor = ComparativeExtractor(self.llm)
+
+                for branch_index in successful:
+                    result = extractor.extract(
+                        trace,
+                        verification,
+                        candidate_index=branch_index,
+                    )
+
+                    candidate = result
+
+                    if result.decision == "CANDIDATE":
+                        break
 
                 atomic_json(
                     candidate_file,
@@ -1102,6 +1109,7 @@ class EvolutionController:
             )
 
             state = {
+                **state,
                 "active_version": active,
                 "completed_rounds": round_id,
             }
@@ -1118,7 +1126,12 @@ class EvolutionController:
         )
 
     def status(self):
-        state = self.initialize()
+        state_path = self.home / "state.json"
+        state = (
+            load_json(state_path)
+            if state_path.exists()
+            else self.initialize()
+        )
 
         print(
             json.dumps(
@@ -1156,21 +1169,50 @@ class EvolutionController:
             )
 
         current = state["active_version"]
+        ancestor = current
         ancestors = set()
 
-        while current:
-            ancestors.add(current)
+        while ancestor:
+            ancestors.add(ancestor)
 
-            current = load_json(
+            ancestor = load_json(
                 self.home
                 / "versions"
-                / f"{current}.json"
+                / f"{ancestor}.json"
             )["parent"]
 
         if version not in ancestors:
             raise ValueError(
                 "Rollback target is not an accepted ancestor"
             )
+
+        if version == current:
+            print(f"Version {version} is already active")
+            return
+
+        pending = (
+            self.home
+            / "rounds"
+            / f"round_{state['completed_rounds'] + 1:02d}"
+            / "decision.json"
+        )
+
+        if pending.exists():
+            raise RuntimeError(
+                "A completed round decision is pending state recovery; "
+                "resume the run before rollback"
+            )
+
+        events = state.setdefault("rollback_events", [])
+
+        if not isinstance(events, list):
+            raise ValueError("Invalid rollback event history")
+
+        events.append({
+            "after_round": state["completed_rounds"],
+            "from": current,
+            "to": version,
+        })
 
         state["active_version"] = version
 

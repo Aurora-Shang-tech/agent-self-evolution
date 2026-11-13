@@ -1,54 +1,96 @@
-"""测试ExperienceStore的保存与加载"""
-
+import tempfile
+import unittest
 from pathlib import Path
 
 from src.memory.experience import Experience
 from src.memory.store import ExperienceStore
 
-OUTPUT_PATH = Path("outputs/test_experience_store.json")
 
-def main():
-    experience = Experience(
-        failure_type="Wrong object type",
-        lesson=(
-            'Distinguish between "cup" and "mug" as distinct object types; '
-            "do not substitute a mug for a cup when the task explicitly "
-            "requires a cup."
-        ),
-        source_task="heat some cup and put it in countertop.",
-    )
+class ExperienceStoreTests(unittest.TestCase):
+    def setUp(self):
+        self.originals = [
+            Experience("old", "Heat objects carefully.", "put a hot cup in shelf."),
+            Experience("old", "Clean objects first.", "put a clean apple in cabinet."),
+            Experience("old", "Find the lamp.", "look at pillow under the desklamp."),
+            Experience("old", "Cool objects first.", "put a cool potato in fridge."),
+        ]
 
-    # 1.创建经验库并添加经验
-    store = ExperienceStore()
-    store.add(experience)
+        self.new = Experience(
+            "memory_evolution",
+            "Prioritize plausible locations for target objects.",
+            "heat some plate and put it in countertop.",
+        )
 
-    print("=" * 60)
-    print("Before Save")
-    print("=" * 60)
-    print(f"Experiences: {len(store)}")
-    print(f"Lesson: {store.experiences[0].lesson}")
+    def make_store(self):
+        store = ExperienceStore()
+        for item in self.originals:
+            store.add(item)
+        return store
 
-    # 2.保存为JSON
-    store.save(OUTPUT_PATH)
+    def test_original_memory_unchanged(self):
+        store = self.make_store()
+        query = "put a hot mug in shelf."
 
-    # 3.创建一个新的空经验库
-    loaded_store = ExperienceStore()
+        before = store.retrieve(query, 3)
+        self.assertEqual(len(before), 3)
 
-    print()
-    print(f"Before load: {len(loaded_store)}")
+        store.add(
+            Experience(
+                "new",
+                "A different task type.",
+                "look at bowl under the desklamp.",
+            ),
+            is_new=True,
+        )
 
-    # 4. 从JSON恢复
-    loaded_store.load(OUTPUT_PATH)
+        after = store.retrieve(query, 3)
+        self.assertEqual(before, after)
 
-    print()
-    print("=" * 60)
-    print("After Load")
-    print("=" * 60)
-    print(f"Experiences: {len(loaded_store)}")
-    print(f"Failure type: {loaded_store.experiences[0].failure_type}")
-    print(f"Lesson: {loaded_store.experiences[0].lesson}")
-    print(f"Source task: {loaded_store.experiences[0].source_task}")
+    def test_new_same_type_takes_one_slot(self):
+        store = self.make_store()
+        query = "put a hot mug in shelf."
+
+        before = store.retrieve(query, 3)
+        store.add(self.new, is_new=True)
+        after = store.retrieve(query, 3)
+
+        self.assertEqual(after[:2], before[:2])
+        self.assertEqual(after[2], self.new)
+
+    def test_unrelated_task_type_not_injected(self):
+        store = self.make_store()
+        query = "put a clean apple in cabinet."
+
+        before = store.retrieve(query, 3)
+        store.add(self.new, is_new=True)
+        after = store.retrieve(query, 3)
+
+        self.assertEqual(before, after)
+        self.assertNotIn(self.new, after)
+
+    def test_save_load_preserves_new_flag(self):
+        store = self.make_store()
+        store.add(self.new, is_new=True)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "memory.json"
+            store.save(path)
+
+            restored = ExperienceStore()
+            restored.load(path)
+
+            self.assertEqual(len(restored), 5)
+            self.assertIn(
+                self.new,
+                restored.retrieve("put a hot mug in shelf.", 3),
+            )
+
+    def test_invalid_top_k(self):
+        store = self.make_store()
+
+        with self.assertRaises(ValueError):
+            store.retrieve("any task", 0)
 
 
 if __name__ == "__main__":
-    main()
+    unittest.main()

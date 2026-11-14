@@ -33,6 +33,18 @@ def main():
     )
 
     parser.add_argument(
+        "--protocol-root",
+        default=None,
+        help="Directory containing the frozen protocol",
+    )
+
+    parser.add_argument(
+        "--reference-memory",
+        action="store_true",
+        help="Use the frozen 130-lesson reference memory",
+    )
+
+    parser.add_argument(
         "--max-rounds",
         type=int,
         default=None,
@@ -52,6 +64,8 @@ def main():
         run_name=args.run_name,
         mode=args.mode,
         pilot=args.pilot,
+        protocol_root=args.protocol_root,
+        reference_memory=args.reference_memory,
     )
 
     if args.stage == "plan":

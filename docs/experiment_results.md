@@ -1,3 +1,68 @@
+<!-- CONTINUAL_32_START -->
+
+## Latest: Continual Evolution with 32 Initial Lessons (2026-11)
+
+### Protocol
+
+- Initial memory: 32 lessons sampled by task type, seed 20261113.
+- Reference: original 130 CF-Verified lessons.
+- Three rounds of 20 learning tasks.
+- Twelve validation tasks and 30 independent Train holdout tasks.
+- Model: qwen3.8-chat; Top-K: 3; max steps: 50.
+- State Tracking enabled.
+- Original 1,000 memory-construction games and 114 old experiment games excluded.
+- New learning, validation and holdout sets disjoint.
+- Initial-32 file SHA256: `6718c94b08e6545275c8c30e0f7d01ca7a509b2b62a8fa8e52fc6e33cbc5f312`.
+
+### Learning Results
+
+| Method | Successful Tasks | Success Rate | Avg. Steps | Active Version |
+|---|---:|---:|---:|---|
+| Fixed-32 | 57/60 | 95.00% | 15.15 | v000 |
+| Append-32 | 57/60 | 95.00% | 14.77 | v000 |
+| Dynamic-32 | 57/60 | 95.00% | 14.73 | v000 |
+| Fixed-130 | 58/60 | 96.67% | 15.02 | v000 |
+
+Append-32 produced an ADD proposal and candidate version v001 in Round 1. The candidate affected 2/12 validation prompts, but achieved 11/12 success versus 11/12 for v000, with average steps 18.00 versus 18.58. The predefined gate required at least 1.0 average step saving when successes tied; therefore v001 was rejected.
+
+Dynamic-32 generated KEEP or NO_CHANGE decisions and did not promote a memory version.
+
+### Independent Holdout Results
+
+| Metric | Fixed-32 | Fixed-130 |
+|---|---:|---:|
+| Success | 30/30 | 29/30 |
+| Success Rate | 100.00% | 96.67% |
+| Average Steps | 14.73 | 17.13 |
+
+Paired comparison from Fixed-32 to Fixed-130: improved 0, regressed 1. On the 29 tasks both methods solved, Fixed-130 averaged 1.00 additional decision step.
+
+Since Fixed-32, Append-32 and Dynamic-32 ended with identical v000 memories, the Fixed-32 holdout is a shared-policy result, not three independent evaluations.
+
+### Candidate Value Diagnostic
+
+Two previously extracted lessons were tested on two development tasks each, comparing original memory with one candidate lesson inserted into Top-3.
+
+- Light-source lesson: step deltas -11, +1; success unchanged.
+- Object-search lesson: step deltas -10, 0; success unchanged.
+- On these matching tasks, normal task-type-priority retrieval produced the same Top-3 as explicit injection.
+
+These are exploratory development observations, not independent confirmation of generalization.
+
+### Interpretation
+
+The full engineering workflow supports feedback collection, counterfactual verification, experience extraction, candidate updates, validation gating and rollback.
+
+No continual-learning method accepted a new memory version. Therefore the observed learning-task efficiency differences cannot be attributed to memory evolution. The holdout results show that a smaller memory can perform competitively on a particular task set, but do not establish statistical or general superiority.
+
+The new holdout consists of previously unused ALFWorld Train games; it is not an ALFWorld Valid Unseen generalization test.
+
+Historical results below may refer to scripts removed during repository cleanup.
+
+<!-- CONTINUAL_32_END -->
+
+---
+
 # Agent Self-Evolution — Experiment Results
 
 > 更新截至 **2026-11-10**。本报告保留原始 ALFWorld、State Tracking 和 Claim-Level Evidence Verification 的历史结果，并增加 Memory Evolution、Hybrid BM25、Utility Learning 与统一 Memory Pipeline 的最新实验。不同批次、任务集合和状态跟踪设置不可混作严格等预算的同一次评估。

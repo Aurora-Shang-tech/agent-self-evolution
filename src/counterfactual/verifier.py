@@ -105,13 +105,58 @@ def verify_counterfactual(
         cf = env.step(counterfactual_action)
 
         if cf.won or cf.done:
+            terminal = Trajectory(
+                task=trajectory.task,
+                gamefile=trajectory.gamefile,
+                success=bool(cf.won),
+            )
+
+            replacement_step = TrajectoryStep(
+                observation=replayed.observation,
+                admissible_actions=list(replayed.admissible_actions),
+                thought="Try an alternative action from the critical state.",
+                action=counterfactual_action,
+                valid_format=True,
+                admissible=cf.admissible,
+                next_observation=cf.observation,
+                score=cf.score,
+                done=cf.done,
+                won=cf.won,
+            )
+
+            terminal.add_step(replacement_step)
+
+            if tracker is not None:
+                tracker.observe(replacement_step)
+
+            feedback = environment_feedback(
+                step=critical_step + 1,
+                observation=cf.observation,
+                admissible_actions=cf.admissible_actions,
+                valid_format=True,
+                admissible=cf.admissible,
+                done=cf.done,
+                won=cf.won,
+            )
+
+            feedback += agent._state_reminder(tracker)
+
+            messages.append({
+                "role": "user",
+                "content": feedback,
+            })
+
+            terminal.messages = [
+                dict(message) for message in messages
+            ]
+
             return CounterfactualResult(
                 critical_step,
                 original_step.action,
                 counterfactual_action,
                 bool(cf.won),
                 0,
-                None,
+                terminal,
             )
 
         if tracker is not None:

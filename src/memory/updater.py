@@ -264,9 +264,21 @@ class ComparativeExtractor:
         ):
             raise ValueError("Counterfactual task or game mismatch")
 
+        direct_win = (
+            result.continuation_steps == 0
+            and len(continuation.steps) == 1
+            and continuation.steps[0].action == result.counterfactual_action
+            and continuation.steps[0].admissible
+            and continuation.steps[0].won
+            and continuation.steps[0].observation == original.observation
+        )
+
         if (
             not continuation.success
-            or result.continuation_steps != len(continuation.steps)
+            or (
+                not direct_win
+                and result.continuation_steps != len(continuation.steps)
+            )
         ):
             raise ValueError(
                 "Counterfactual outcome or length inconsistent"
@@ -300,7 +312,11 @@ class ComparativeExtractor:
         evidence["counterfactual:replacement"] = {
             "observation_before": original.observation,
             "action": result.counterfactual_action,
-            "observation_after": continuation.steps[0].observation,
+            "observation_after": (
+                continuation.steps[0].next_observation
+                if direct_win
+                else continuation.steps[0].observation
+            ),
             "admissible_before": True,
             "task_success_at_end_of_continuation": result.success,
         }

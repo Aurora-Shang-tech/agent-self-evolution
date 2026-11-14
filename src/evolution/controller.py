@@ -202,6 +202,8 @@ class EvolutionController:
         run_name: str,
         mode: str,
         pilot: bool,
+        protocol_root: str | Path | None = None,
+        reference_memory: bool = False,
     ):
         if mode not in {"fixed", "append", "dynamic"}:
             raise ValueError("Unsupported evolution mode")
@@ -219,11 +221,19 @@ class EvolutionController:
         ):
             raise ValueError("Invalid run name")
 
+        if reference_memory and mode != "fixed":
+            raise ValueError("Reference-130 supports fixed mode only")
+
         self.mode = mode
         self.pilot = pilot
+        self.root = (
+            Path(protocol_root)
+            if protocol_root is not None
+            else ROOT
+        )
 
-        self.home = ROOT / "runs" / run_name
-        self.protocol_path = ROOT / "protocol.json"
+        self.home = self.root / "runs" / run_name
+        self.protocol_path = self.root / "protocol.json"
         self.protocol = load_json(self.protocol_path)
 
         self.model = self.protocol["model"]
@@ -274,7 +284,7 @@ class EvolutionController:
         self.learn_sets = []
 
         for index in range(1, self.rounds + 1):
-            file = ROOT / f"learning_round_{index:02d}.json"
+            file = self.root / f"learning_round_{index:02d}.json"
 
             if (
                 digest(file)
@@ -288,7 +298,7 @@ class EvolutionController:
                 load_manifest(file)[:self.learn_limit]
             )
 
-        validation_path = ROOT / "validation.json"
+        validation_path = self.root / "validation.json"
 
         if (
             digest(validation_path)
@@ -302,7 +312,7 @@ class EvolutionController:
             validation_path
         )[:self.validation_limit]
 
-        final_path = ROOT / "final_holdout.json"
+        final_path = self.root / "final_holdout.json"
 
         if (
             digest(final_path)
@@ -312,17 +322,24 @@ class EvolutionController:
                 "Final holdout manifest changed"
             )
 
-        self.initial_path = Path(
-            self.protocol["initial_memory"]
+        memory_key = (
+            "reference_memory_130"
+            if reference_memory
+            else "initial_memory"
+        )
+        hash_key = (
+            "reference_memory_130_sha256"
+            if reference_memory
+            else "initial_memory_sha256"
         )
 
-        if (
-            digest(self.initial_path)
-            != self.protocol["initial_memory_sha256"]
-        ):
-            raise RuntimeError(
-                "Original memory has changed"
-            )
+        if memory_key not in self.protocol or hash_key not in self.protocol:
+            raise ValueError("Memory profile missing from protocol")
+
+        self.initial_path = Path(self.protocol[memory_key])
+
+        if digest(self.initial_path) != self.protocol[hash_key]:
+            raise RuntimeError("Initial memory has changed")
 
         self.frozen_config = {
             "schema": "continual_run_v1",
@@ -336,6 +353,17 @@ class EvolutionController:
                 for path in CODE_FILES
             },
         }
+
+        if protocol_root is not None or reference_memory:
+            self.frozen_config["protocol_root"] = str(
+                self.root.resolve()
+            )
+            self.frozen_config["memory_profile"] = (
+                "reference_130" if reference_memory else "initial"
+            )
+            self.frozen_config["initial_memory_sha256"] = digest(
+                self.initial_path
+            )
 
         self._llm = None
 

@@ -626,3 +626,25 @@ Full methodology and limitations:
 [Skill Learning Results](skill_learning_results.md).
 
 <!-- SKILL_LEARNING_V1_SUMMARY_END -->
+
+<!-- UNIFIED_EVOLUTION_RESULT_START -->
+
+## Unified Agent Self-Evolution: Online Pilot (2026-11)
+
+The unified runtime completed six frozen ALFWorld Train
+development tasks with Fixed-32 Memory and no active Skill.
+
+Five tasks succeeded; three were archived, one entered
+Memory Review and two entered Skill Review.
+
+The failed task's two tested counterfactual replacements
+both failed. The two successful but inefficient tasks
+did not produce verified transferable Skill candidates.
+
+No memory or skill was promoted. This demonstrates
+integration and conservative review decisions, not
+a measured performance improvement from evolution.
+
+Detailed evidence: [Unified Online Pilot](unified_evolution_results.md).
+
+<!-- UNIFIED_EVOLUTION_RESULT_END -->

@@ -135,3 +135,24 @@ The project implements a complete training-free agent feedback and memory evolut
 Current experiments demonstrate engineering feasibility and local candidate-lesson utility, but do not establish that continual memory evolution outperforms fixed memory. No candidate memory version passed the frozen acceptance gate.
 
 Historical experiments and detailed results are documented in `docs/experiment_results.md`.
+
+<!-- SKILL_LEARNING_V1_START -->
+## Feedback-Driven Skill Learning (2026-11)
+
+An additional experimental workflow studies learning
+conditional search skills from successful but inefficient
+ALFWorld trajectories. It supports LLM skill proposals,
+runtime Hint / Execute interventions, paired environment
+evaluation, promotion gating, and feedback-driven abstention.
+
+On 12 development tasks, Baseline / Hint / Execute all
+solved 12/12 games. Mean environment actions were
+13.92 / 13.17 / 14.83, respectively. The Hint improvement
+of 0.75 actions per task was below the frozen 1.0-action
+acceptance threshold. Candidate c001 was rejected, and
+the LLM abstained from proposing a defensible revision.
+No skill is active; the 30-task final holdout was not run.
+
+See [Skill Learning Results](docs/skill_learning_results.md)
+for the methodology, limitations, and reproduction paths.
+<!-- SKILL_LEARNING_V1_END -->

@@ -596,3 +596,33 @@ uv run python -m scripts.evaluation.evaluate_pipeline_pair --stage report
 5. **不夸大当前结论**：Utility v1 小样本正向、集成 + State 小样本效率退步，说明不同配置的收益可能不同。下阶段应优先复用已有代码与数据，避免对同一组任务反复调参并称其为独立验证。
 
 **项目状态：Memory Evolution、Hybrid Retrieval、Utility Learning 与 State Tracking 已形成完整工程闭环；性能优势仍须依据具体任务集和对照设置判断。**
+
+<!-- SKILL_LEARNING_V1_SUMMARY_START -->
+
+## 18. Feedback-Driven Skill Learning (2026-11)
+
+Success-trajectory analysis and real counterfactual replays
+were used to develop the conditional search candidate
+`stalled_search_countertop_redirect`.
+
+The online experiment used Fixed-32 memory, State Tracking,
+BM25 Top-3, and 12 new Train development games. Baseline,
+Hint, and Execute all achieved 12/12 successes. Total
+environment actions were 167, 158, and 178, respectively.
+
+The predefined development gate required at least one
+mean environment action saved without success regression.
+Hint saved only 0.75 on average, while Execute increased
+the mean by approximately 0.92. Neither was accepted.
+
+The c001 candidate is `REJECTED_ON_DEV`. Feedback-driven
+revision returned `ABSTAIN`; no c002 was created.
+The 30-game final holdout was left untouched.
+
+These experiments demonstrate a working skill validation
+and rejection workflow, not sustained skill-learning gains.
+
+Full methodology and limitations:
+[Skill Learning Results](skill_learning_results.md).
+
+<!-- SKILL_LEARNING_V1_SUMMARY_END -->

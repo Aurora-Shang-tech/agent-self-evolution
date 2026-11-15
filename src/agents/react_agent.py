@@ -9,6 +9,7 @@ from src.core.protocol import (
 from src.core.trajectory import Trajectory, TrajectoryStep
 from src.envs.environment import ALFWorldEnvironment
 from src.memory.state_tracker import TaskStateTracker
+from src.skills.search_skill import ConditionalSearchSkill
 
 
 class ReActAgent:
@@ -19,7 +20,21 @@ class ReActAgent:
         experience_store=None,
         experience_top_k: int = 3,
         use_state_tracking: bool = False,
+        search_skill_mode: str | None = None,
+        search_skill_proposal: dict | None = None,
     ):
+        if search_skill_mode not in (None, "hint", "execute"):
+            raise ValueError("Invalid search skill mode")
+
+        if (search_skill_mode is None) != (
+            search_skill_proposal is None
+        ):
+            raise ValueError("Skill mode and proposal must be paired")
+
+        self.search_skill_mode = search_skill_mode
+        self.search_skill_proposal = search_skill_proposal
+        self.skill_events = []
+        self.llm_calls = 0
         self.llm = llm
         self.max_steps = max_steps
         self.experience_store = experience_store
@@ -27,7 +42,20 @@ class ReActAgent:
         self.use_state_tracking = use_state_tracking
 
     def run(self, env: ALFWorldEnvironment) -> Trajectory:
+        self.skill_events = []
+        self.llm_calls = 0
+
         state = env.reset()
+
+        skill = (
+            ConditionalSearchSkill(
+                self.search_skill_proposal,
+                state.task,
+            )
+            if self.search_skill_mode is not None
+            else None
+        )
+
         trajectory = Trajectory(
             task=state.task,
             gamefile=state.gamefile,
@@ -70,6 +98,7 @@ class ReActAgent:
             admissible_actions=state.admissible_actions,
             max_decisions=self.max_steps,
             tracker=tracker,
+            skill=skill,
         )
 
     def continue_from(
@@ -118,10 +147,56 @@ class ReActAgent:
         max_decisions: int,
         tracker: TaskStateTracker | None = None,
         step_offset: int = 0,
+        skill=None,
     ) -> Trajectory:
         for local_step in range(max_decisions):
-            response = self.llm.chat(messages)
+            suggestion = (
+                skill.suggest(admissible_actions)
+                if skill is not None
+                else None
+            )
+
+            response = None
+
+            if suggestion is not None:
+                skill.consume()
+
+                if self.search_skill_mode == "hint":
+                    messages[-1]["content"] += (
+                        "\n\nOptional learned search suggestion:\n"
+                        "The target has not been found after several "
+                        "inspected locations. Consider "
+                        f"{suggestion}, which is currently admissible "
+                        "and visits an uninspected countertop. "
+                        "This does NOT guarantee the target is there. "
+                        "You may choose a different admissible action "
+                        "if your observations support it. Match the "
+                        "exact target object type; do not confuse "
+                        "similar names. If the suggested location "
+                        "has no target, continue reasoning from "
+                        "new observations."
+                    )
+
+                elif self.search_skill_mode == "execute":
+                    response = (
+                        "Thought: Apply one conditional search skill action.\n"
+                        f"Action: {suggestion}"
+                    )
+
+            if response is None:
+                self.llm_calls += 1
+                response = self.llm.chat(messages)
+
             parsed = parse_assistant(response)
+
+            if suggestion is not None:
+                self.skill_events.append({
+                    "step_index": step_offset + local_step,
+                    "mode": self.search_skill_mode,
+                    "suggested_action": suggestion,
+                    "chosen_action": parsed.action,
+                    "followed": parsed.action == suggestion,
+                })
 
             messages.append({
                 "role": "assistant",
@@ -183,6 +258,9 @@ class ReActAgent:
 
             if tracker is not None:
                 tracker.observe(step)
+
+            if skill is not None:
+                skill.observe(step)
 
             if env_step.won:
                 trajectory.success = True

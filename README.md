@@ -398,3 +398,57 @@ outputs/unified_evolution_v1/
 - [统一自进化在线 Pilot](docs/unified_evolution_results.md)
 
 项目持续以真实环境反馈、可验证证据和可复现实验为基础推进。
+
+<!-- UNIFIED_ONLINE_V3_START -->
+
+## 统一在线工作流 V3（2026-11）
+
+完成了基于 ALFWorld Train 任务的统一反馈调度与恢复机制，
+包括 OnlineReviewScheduler、Memory/Skill Handler、
+持久化 LLM 调用预算和 Review 进程锁。
+
+第二轮冻结批次覆盖六种任务类型：
+
+| 指标 | 结果 |
+|---|---:|
+| 执行任务 | 6 |
+| 成功任务 | 6 |
+| 平均环境动作 | 14.67 |
+| ARCHIVE | 4 |
+| SKILL_REVIEW | 2 |
+| MEMORY_REVIEW | 0 |
+| 能力晋升 | 0 |
+
+两次 Skill Review 均完成低效诊断并正确恢复缓存。
+最终活跃能力保持 Memory v000、Active Skill None。
+
+查看批次审计：
+
+```bash
+uv run python -m scripts.audit_unified_batch
+```
+
+查看 V3 统一工作流：
+
+```bash
+uv run python -m scripts.run_unified_v3 --stage report
+```
+
+检查冻结批次的执行与 Review 缓存：
+
+```bash
+uv run python -m scripts.run_unified_v3 \
+  --stage run --limit 6 --max-new-jobs 0
+```
+
+V3 默认不执行新的 Review Job，也不自动晋升能力。
+真实在线 Memory 预算恢复和 Memory/Skill 自动晋升
+尚未完成端到端验证。V3 当前复用指定冻结批次，
+不是任意新批次的通用长期调度器。
+
+本阶段结果证明了在线工作流的集成和恢复能力，
+**不证明自进化优于固定能力基线**。
+
+完整记录：[统一在线工作流 V3 实验报告](docs/unified_online_v3_results.md)。
+
+<!-- UNIFIED_ONLINE_V3_END -->

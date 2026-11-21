@@ -1,3 +1,78 @@
+<!-- FORMAL_LARGE_FINAL_START -->
+
+## 正式自进化实验与最终配对评估（2026-11-21）
+
+### 实验设置
+
+- 实际学习规模：720 个 Train Episode，10 轮，每轮 72 个。
+- 初始 Memory：32 条，v000。
+- 模型：qwen3.8-chat。
+- 检索：BM25 Top-3，启用 State Tracking。
+- 最大决策步数：50。
+- 每轮最多处理 10 个失败，每个失败最多验证 3 个反事实动作。
+- 版本选择使用冻结 Train 验证集；最终比较使用 valid_seen 和 valid_unseen。
+
+### 自进化结果
+
+- 完成 10/10 轮。
+- Round 1：候选通过 success_gain 门控，v000 → v001。
+- Round 2～10：均为 no_memory_change，活跃版本保持 v001。
+- v000 包含 32 条 Lesson，v001 包含 33 条 Lesson。
+- v001 删除 base_0011，新增 evo_r01_e000、evo_r01_e067。
+
+### 最终评估
+
+| 测试集 | 固定 v000 | 动态 v001 | 改进 / 退化 |
+|---|---:|---:|---:|
+| valid_seen | 136/140 (97.14%) | 135/140 (96.43%) | 0 / 1 |
+| valid_unseen | 133/134 (99.25%) | 132/134 (98.51%) | 0 / 1 |
+| 合计 | **269/274 (98.18%)** | **267/274 (97.45%)** | **0 / 2** |
+
+- valid_seen 平均决策步数变化：-0.20。
+- valid_unseen 平均决策步数变化：+0.47。
+- 两个测试集分别进行的双侧精确 McNemar 检验均为 p=1.0。
+- 没有观察到统计显著的泛化成功率提升。
+
+### 退化案例分析
+
+**valid_seen：ButterKnife 清洁任务**
+
+- v000：11 步成功；v001：50 步失败。
+- v001 的 Top-3 不再包含 base_0011。
+
+**valid_unseen：Knife 清洁任务**
+
+- v000：7 步成功；v001：50 步失败。
+- v001 的 Top-3 同样不再包含 base_0011。
+
+base_0011 记录了 ALFWorld 中 knife 与 butterknife 的特殊对应关系。
+Round 1 的 Memory 更新删除了该经验，同时新增两条 Desklamp 相关经验。
+
+两例退化均伴随 Top-3 检索变化，说明关键知识丢失是值得关注的退化机制。
+但当前结果不能单独证明删除操作与失败之间存在确定因果关系。
+
+### 结论与限制
+
+系统完成了失败反馈、反事实验证、Lesson 更新、版本门控和自动晋升的工程闭环。
+
+但 v001 在局部验证集上通过门控后，未能在最终评估中优于 v000。
+因此，当前证据支持“自动经验更新机制可运行”，不支持“自进化已稳定提高泛化性能”。
+
+由于 valid_seen、valid_unseen 曾用于历史项目实验，本次结果不属于完全未经接触的新测试集。
+模型输出波动以及有限的退化样本也限制了因果解释。
+
+**版本使用决策：** 保留全部实验记录，推荐继续使用 v000，不修改历史 v001 快照或实验状态。
+
+### 结果位置
+
+- 协议：`outputs/continual_formal_large_v1/protocol.json`
+- 版本与轮次：`outputs/continual_formal_large_v1/runs/dynamic_large_v1/`
+- 配对评估：`outputs/continual_formal_large_v1/final_pair_v000_v001/`
+
+<!-- FORMAL_LARGE_FINAL_END -->
+
+---
+
 <!-- CONTINUAL_32_START -->
 
 ## Latest: Continual Evolution with 32 Initial Lessons (2026-11)

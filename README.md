@@ -255,7 +255,7 @@ FailureAnalyzer 提出三个候选反事实动作，其中两个经过真实 ALF
 两条任务的主要动作成本集中在目标搜索阶段。
 
 _CANDIDATE_IN_PILOT`。
-但�
+但�
 
 #### Pilot 结论
 
@@ -452,3 +452,35 @@ V3 默认不执行新的 Review Job，也不自动晋升能力。
 完整记录：[统一在线工作流 V3 实验报告](docs/unified_online_v3_results.md)。
 
 <!-- UNIFIED_ONLINE_V3_END -->
+
+<!-- FORMAL_LARGE_README_START -->
+
+## 最新正式自进化实验（2026-11）
+
+完成 10 轮大规模 Train 学习实验，初始 Memory 为 32 条。
+
+- Round 1：通过 success_gain 门控，v000 晋升至 v001。
+- Round 2～10：无进一步 Memory 更新。
+- v001：删除 base_0011，新增两条 Desklamp 经验。
+
+### 最终配对评估
+
+| 数据集 | 固定 v000 | 动态 v001 |
+|---|---:|---:|
+| valid_seen | 136/140 | 135/140 |
+| valid_unseen | 133/134 | 132/134 |
+| 合计 | **269/274 (98.18%)** | **267/274 (97.45%)** |
+
+动态版本出现 0 个改善、2 个退化任务。
+
+**结论：** 已实现自动反事实学习、经验更新和版本晋升，
+但 v001 未在最终评估中取得泛化收益。
+
+两例退化均与 Knife/ButterKnife 关键经验被删除后的检索变化有关，
+但尚未确认严格因果关系。
+
+当前推荐使用 **v000**，保留 v001 的完整实验记录。
+
+详细结果参见 `docs/experiment_results.md`。
+
+<!-- FORMAL_LARGE_README_END -->
